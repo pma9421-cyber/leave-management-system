@@ -10,6 +10,7 @@ import {
 } from '../types.ts';
 import { INITIAL_USERS } from '../data/initialData.ts';
 import { useAuditLogSafe } from './AuditLogContext.tsx';
+import { supabase } from '../lib/supabase.ts';
 
 export const normalizeBizNum = (num?: string): string => {
   return (num || '').replace(/\D/g, '');
@@ -27,7 +28,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   users: User[];
   companyUsers: User[];
-  login: (email: string, password?: string, businessNumber?: string) => { success: boolean; error?: string };
+  login: (email: string, password?: string, businessNumber?: string) => Promise<{ success: boolean; error?: string }>;
   register: (data: {
     email: string;
     name: string;
@@ -38,8 +39,8 @@ interface AuthContextType {
     role: UserRole;
     totalLeaveDays?: number;
     password?: string;
-  }) => { success: boolean; error?: string; isPending?: boolean };
-  logout: () => void;
+  }) => Promise<{ success: boolean; error?: string; isPending?: boolean }>;
+  logout: () => Promise<void>;
   switchUser: (userId: string) => void;
   updateUserQuota: (userId: string, newTotalDays: number, year?: number) => void;
   updateUserLeaveBreakdown: (
@@ -146,56 +147,181 @@ const INITIAL_BIZ_LIMITS: BusinessAdminLimit[] = [
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const auditLog = useAuditLogSafe();
 
-  // Users state: keep only the Master Super Admin account on initial production launch
-  const [users, setUsers] = useState<User[]>(() => {
-    try {
-      // Clear legacy storage keys
-      [
-        'leave_app_users_v1',
-        'leave_app_users_v2',
-        'leave_app_users_v3',
-        'leave_app_users_v4',
-        'leave_app_users_v5',
-        'leave_app_users_v6',
-        'leave_app_users_v7',
-        'leave_app_users_v8',
-        'leave_app_users_v9',
-        'leave_app_users_v10',
-        'leave_app_pw_resets_v1',
-        'leave_app_pw_resets_v2',
-        'leave_app_pw_resets_v3',
-      ].forEach((key) => {
-        try {
-          localStorage.removeItem(key);
-        } catch {
-          // ignore
+  // Supabase is the source of truth for authentication and user profiles.
+  const [users, setUsers] = useState<User[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  const mapProfileToUser = (profile: any, company?: any, quotaRows: any[] = []): User => {
+    const annualQuotas: Record<number, UserYearQuota> = {};
+    for (const q of quotaRows || []) {
+      const statutory = Number(q.statutory_leave_days || 0);
+      const carried = Number(q.carried_over_leave_days || 0);
+      const compensatory = Number(q.compensatory_leave_days || 0);
+      const adjusted = Number(q.adjusted_days || 0);
+      const used = Number(q.used_leave_days || 0);
+      annualQuotas[Number(q.year)] = {
+        year: Number(q.year),
+        statutoryLeaveDays: statutory,
+        carriedOverLeaveDays: carried,
+        compensatoryLeaveDays: compensatory,
+        adjustedDays: adjusted,
+        expiredDays: Number(q.expired_days || 0),
+        totalLeaveDays: statutory + carried + compensatory + adjusted,
+        usedLeaveDays: used,
+      };
+    }
+
+    const year = new Date().getFullYear();
+    const currentQuota = annualQuotas[year];
+    const totalLeaveDays = currentQuota?.totalLeaveDays ?? 0;
+    const usedLeaveDays = currentQuota?.usedLeaveDays ?? 0;
+
+    return {
+      id: profile.id,
+      email: profile.email || '',
+      name: profile.name || '',
+      role: profile.role as UserRole,
+      businessNumber: formatBizNum(company?.business_number || ''),
+      companyName: company?.company_name || '',
+      department: profile.department || undefined,
+      position: profile.position || '사원',
+      joinedDate: profile.joined_date || new Date().toISOString().slice(0, 10),
+      avatarUrl: profile.avatar_url || undefined,
+      statutoryLeaveDays: currentQuota?.statutoryLeaveDays ?? 0,
+      carriedOverLeaveDays: currentQuota?.carriedOverLeaveDays ?? 0,
+      compensatoryLeaveDays: currentQuota?.compensatoryLeaveDays ?? 0,
+      totalLeaveDays,
+      usedLeaveDays,
+      status: profile.status as AccountStatus,
+      annualQuotas,
+    };
+  };
+
+  const ensureProfileForAuthUser = async (authUser: any) => {
+    const existing = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', authUser.id)
+      .maybeSingle();
+
+    if (existing.error) throw existing.error;
+    if (existing.data) return existing.data;
+
+    const meta = authUser.user_metadata || {};
+    if (!meta.business_number || !meta.name) {
+      throw new Error('사용자 프로필 정보가 없습니다. 관리자에게 문의해 주세요.');
+    }
+
+    const { data, error } = await supabase.rpc('register_profile', {
+      p_name: meta.name,
+      p_business_number: meta.business_number,
+      p_company_name: meta.company_name || '',
+      p_department: meta.department || null,
+      p_position: meta.position || '사원',
+      p_joined_date: meta.joined_date || new Date().toISOString().slice(0, 10),
+      p_requested_role: meta.requested_role === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+    });
+
+    if (error) throw error;
+    return data;
+  };
+
+  const refreshUsersFromSupabase = async () => {
+    const { data: profileRows, error: profileError } = await supabase
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: true });
+    if (profileError) throw profileError;
+
+    const profiles = profileRows || [];
+    if (profiles.length === 0) {
+      setUsers([]);
+      return;
+    }
+
+    const companyIds = [...new Set(profiles.map((p: any) => p.company_id).filter(Boolean))];
+    const userIds = profiles.map((p: any) => p.id);
+
+    const [{ data: companyRows, error: companyError }, { data: quotaRows, error: quotaError }] = await Promise.all([
+      companyIds.length
+        ? supabase.from('companies').select('id,business_number,company_name,max_admin_count').in('id', companyIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      userIds.length
+        ? supabase.from('leave_quotas').select('*').in('user_id', userIds)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+
+    if (companyError) throw companyError;
+    if (quotaError) throw quotaError;
+
+    const companiesById = new Map((companyRows || []).map((c: any) => [c.id, c]));
+    const quotasByUser = new Map<string, any[]>();
+    for (const q of quotaRows || []) {
+      const list = quotasByUser.get(q.user_id) || [];
+      list.push(q);
+      quotasByUser.set(q.user_id, list);
+    }
+
+    setUsers(
+      profiles.map((p: any) =>
+        mapProfileToUser(p, companiesById.get(p.company_id), quotasByUser.get(p.id) || [])
+      )
+    );
+  };
+
+  useEffect(() => {
+    let alive = true;
+
+    const hydrate = async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const authUser = data.session?.user;
+        if (!authUser || !alive) return;
+        const profile = await ensureProfileForAuthUser(authUser);
+        if (!alive) return;
+        if (profile.status !== 'APPROVED') {
+          await supabase.auth.signOut();
+          return;
         }
-      });
-
-      const saved = localStorage.getItem(USERS_STORAGE_KEY);
-      if (saved) {
-        const parsed: User[] = JSON.parse(saved);
-  return parsed;
+        setCurrentUserId(authUser.id);
+        await refreshUsersFromSupabase();
+      } catch (e) {
+        console.error('Supabase auth hydration failed', e);
       }
-    } catch (e) {
-      console.error('Failed to load users from localStorage', e);
-    }
-    return INITIAL_USERS;
-  });
+    };
 
-  // Current logged in user ID
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
-    try {
-      const savedId = sessionStorage.getItem(CURRENT_USER_KEY);
-      if (savedId) {
-        return savedId;
-      }
-    } catch (e) {
-      console.error('Failed to load current user ID', e);
-    }
-    // Default to null (unauthenticated, requires login)
-    return null;
-  });
+    void hydrate();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      window.setTimeout(async () => {
+        try {
+          const authUser = session?.user;
+          if (!authUser || !alive) {
+            if (alive) {
+              setCurrentUserId(null);
+              setUsers([]);
+            }
+            return;
+          }
+          const profile = await ensureProfileForAuthUser(authUser);
+          if (!alive) return;
+          if (profile.status !== 'APPROVED') {
+            await supabase.auth.signOut();
+            return;
+          }
+          setCurrentUserId(authUser.id);
+          await refreshUsersFromSupabase();
+        } catch (e) {
+          console.error('Supabase auth state sync failed', e);
+        }
+      }, 0);
+    });
+
+    return () => {
+      alive = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
 
   // Password reset requests
   const [passwordResetRequests, setPasswordResetRequests] = useState<PasswordResetRequest[]>(() => {
@@ -222,28 +348,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     return INITIAL_BIZ_LIMITS;
   });
-
-  // Save users
-  useEffect(() => {
-    try {
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-    } catch (e) {
-      console.error('Failed to save users to localStorage', e);
-    }
-  }, [users]);
-
-  // Save session user
-  useEffect(() => {
-    try {
-      if (currentUserId) {
-        sessionStorage.setItem(CURRENT_USER_KEY, currentUserId);
-      } else {
-        sessionStorage.removeItem(CURRENT_USER_KEY);
-      }
-    } catch (e) {
-      console.error('Failed to save current user ID', e);
-    }
-  }, [currentUserId]);
 
   // Save password resets
   useEffect(() => {
@@ -768,117 +872,61 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return res;
   };
 
-  const login = (email: string, password?: string, businessNumber?: string) => {
-    const trimmedEmail = email.trim().toLowerCase();
-    const inputBizDigits = businessNumber ? normalizeBizNum(businessNumber) : '';
+  const login = async (email: string, password?: string, businessNumber?: string) => {
+    const trimmedEmail = (email || '').trim().toLowerCase();
+    const trimmedPassword = (password || '').trim();
+    const bizDigits = normalizeBizNum(businessNumber);
 
-    let found: User | undefined;
-
-    if (inputBizDigits) {
-      found = users.find(
-        (u) =>
-          u.email.toLowerCase() === trimmedEmail &&
-          normalizeBizNum(u.businessNumber) === inputBizDigits
-      );
-      if (!found) {
-        const emailExists = users.find((u) => u.email.toLowerCase() === trimmedEmail);
-        if (emailExists) {
-          return {
-            success: false,
-            error: '입력하신 회사 사업자등록번호와 일치하지 않는 계정입니다.',
-          };
-        }
-        return {
-          success: false,
-          error: '입력하신 사업자번호 및 이메일로 등록된 계정을 찾을 수 없습니다.',
-        };
-      }
-    } else {
-      found = users.find((u) => u.email.toLowerCase() === trimmedEmail);
-      if (!found) {
-        return { success: false, error: '등록되지 않은 이메일 주소입니다.' };
-      }
+    if (!trimmedEmail || !trimmedPassword || !bizDigits) {
+      return { success: false, error: '사업자등록번호, 이메일, 비밀번호를 모두 입력해 주세요.' };
     }
 
-    // Password verification (if password provided)
-    if (password) {
-      const trimmedInputPw = password.trim();
-      const userPw = found.password || '';
-      const userTempPw = found.tempPassword;
-
-      const matchesRegular = trimmedInputPw === userPw;
-      const matchesTemp = userTempPw && trimmedInputPw === userTempPw;
-
-      if (!matchesRegular && !matchesTemp) {
-        return {
-          success: false,
-          error: '비밀번호가 일치하지 않습니다. 비밀번호를 잊으셨다면 [비밀번호 찾기]를 신청해 주세요.',
-        };
-      }
-
-      // If logged in using temp password, require immediate password change
-      if (matchesTemp) {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === found!.id ? { ...u, requirePasswordChange: true } : u))
-        );
-      }
-    }
-
-    // Check account status
-    if (found.status === 'INACTIVE') {
-      return {
-        success: false,
-        error: '비활성화(이용 정지)된 계정입니다. 시스템 관리자에게 문의해 주세요.',
-      };
-    }
-
-    if (found.role === 'EMPLOYEE') {
-      if (found.status === 'PENDING') {
-        return {
-          success: false,
-          error:
-            '가입 승인 대기 중인 직원 계정입니다. 관리자가 [직원관리]에서 승인한 후 로그인하실 수 있습니다.',
-        };
-      }
-      if (found.status === 'REJECTED') {
-        return {
-          success: false,
-          error: '가입 신청이 반려된 계정입니다. 관리자에게 문의해 주세요.',
-        };
-      }
-    }
-
-    setCurrentUserId(found.id);
-
-    // Record login in audit log
-    const roleLabel =
-      found.role === 'SUPER_ADMIN'
-        ? '마스터 관리자'
-        : found.role === 'ADMIN'
-        ? '관리자'
-        : '직원';
-
-    auditLog?.addAuditLog({
-      actionType: 'LOGIN',
-      actionTitle: `사용자 로그인 성공 (${roleLabel})`,
-      userId: found.id,
-      userName: found.name,
-      userEmail: found.email,
-      userDepartment: found.department,
-      userPosition: found.position,
-      userRole: found.role,
-      operatorId: found.id,
-      operatorName: `${found.name} (본인)`,
-      operatorRole: 'SELF',
-      ipAddress: '192.168.1.42',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `${found.name} (${found.email}) 계정으로 시스템에 정상 로그인하였습니다. (사업자번호: ${found.businessNumber})`,
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: trimmedEmail,
+      password: trimmedPassword,
     });
 
-    return { success: true };
+    if (error || !data.user) {
+      return { success: false, error: '이메일 또는 비밀번호가 올바르지 않습니다.' };
+    }
+
+    try {
+      const profile = await ensureProfileForAuthUser(data.user);
+      const { data: company, error: companyError } = await supabase
+        .from('companies')
+        .select('business_number,company_name')
+        .eq('id', profile.company_id)
+        .single();
+      if (companyError) throw companyError;
+
+      if (normalizeBizNum(company.business_number) !== bizDigits) {
+        await supabase.auth.signOut();
+        return { success: false, error: '사업자등록번호와 계정 정보가 일치하지 않습니다.' };
+      }
+
+      if (profile.status === 'PENDING') {
+        await supabase.auth.signOut();
+        return { success: false, error: '관리자 승인 대기 중인 계정입니다.' };
+      }
+      if (profile.status === 'REJECTED') {
+        await supabase.auth.signOut();
+        return { success: false, error: '가입이 반려된 계정입니다. 관리자에게 문의해 주세요.' };
+      }
+      if (profile.status === 'INACTIVE') {
+        await supabase.auth.signOut();
+        return { success: false, error: '비활성화된 계정입니다. 관리자에게 문의해 주세요.' };
+      }
+
+      setCurrentUserId(data.user.id);
+      await refreshUsersFromSupabase();
+      return { success: true };
+    } catch (e: any) {
+      await supabase.auth.signOut();
+      return { success: false, error: e?.message || '사용자 정보를 불러오지 못했습니다.' };
+    }
   };
 
-  const register = (data: {
+  const register = async (data: {
     email: string;
     name: string;
     businessNumber: string;
@@ -889,145 +937,63 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     totalLeaveDays?: number;
     password?: string;
   }) => {
-    const trimmedEmail = data.email.trim().toLowerCase();
-    const formattedBiz = formatBizNum(data.businessNumber);
-    const bizDigits = normalizeBizNum(data.businessNumber);
+    const email = (data.email || '').trim().toLowerCase();
+    const password = (data.password || '').trim();
+    const businessNumber = normalizeBizNum(data.businessNumber);
 
-    if (!bizDigits || bizDigits.length < 5) {
-      return { success: false, error: '올바른 사업자등록번호(10자리)를 입력해 주세요.' };
+    if (!email || !password || !data.name.trim() || businessNumber.length !== 10) {
+      return { success: false, error: '필수 입력값을 확인해 주세요.' };
+    }
+    if (password.length < 6) {
+      return { success: false, error: '비밀번호는 6자리 이상으로 입력해 주세요.' };
+    }
+    if (data.role === 'SUPER_ADMIN') {
+      return { success: false, error: '최고관리자 계정은 회원가입으로 생성할 수 없습니다.' };
     }
 
-    if (!data.password || data.password.trim().length < 4) {
-      return { success: false, error: '비밀번호는 최소 4자리 이상이어야 합니다.' };
+    const redirectTo = `${window.location.origin}/`;
+    const { data: signUpData, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: redirectTo,
+        data: {
+          name: data.name.trim(),
+          business_number: businessNumber,
+          company_name: (data.companyName || '').trim(),
+          department: (data.department || '').trim(),
+          position: (data.position || '사원').trim(),
+          requested_role: data.role === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+          joined_date: new Date().toISOString().slice(0, 10),
+        },
+      },
+    });
+
+    if (error) {
+      return { success: false, error: error.message || '회원가입에 실패했습니다.' };
     }
 
-    // Check if email already registered within this business
-    if (
-      users.some(
-        (u) =>
-          u.email.toLowerCase() === trimmedEmail &&
-          normalizeBizNum(u.businessNumber) === bizDigits
-      )
-    ) {
-      return { success: false, error: '해당 사업장에 이미 등록된 이메일 주소입니다.' };
-    }
-
-    // Check Business Admin Quota Limit if trying to register as ADMIN
-    if (data.role === 'ADMIN') {
-      const currentAdminCount = users.filter(
-        (u) => normalizeBizNum(u.businessNumber) === bizDigits && u.role === 'ADMIN'
-      ).length;
-      const maxAllowed = getBusinessAdminLimit(data.businessNumber);
-
-      if (currentAdminCount >= maxAllowed) {
-        return {
-          success: false,
-          error: `해당 사업장(사업자번호: ${formattedBiz})의 관리자 계정 최대 생성 한도(${maxAllowed}개)에 도달하였습니다. 추가 관리자 계정을 가입할 수 없습니다. 시스템 최고 관리자(admin)에게 관리자 수 증설을 요청하세요.`,
-        };
+    // Email confirmation is enabled in Supabase. If a session is immediately
+    // available (e.g. confirmation disabled during testing), create the profile now.
+    if (signUpData.session?.user) {
+      try {
+        await ensureProfileForAuthUser(signUpData.session.user);
+        await supabase.auth.signOut();
+      } catch (e: any) {
+        return { success: false, error: e?.message || '프로필 생성에 실패했습니다.' };
       }
     }
 
-    const isEmployee = data.role === 'EMPLOYEE';
-    const accountStatus: AccountStatus = isEmployee ? 'PENDING' : 'APPROVED';
-
-    const existingLimit = businessAdminLimits.find(
-      (b) => normalizeBizNum(b.businessNumber) === bizDigits
-    );
-    const existingUserWithCompany = users.find(
-      (u) => normalizeBizNum(u.businessNumber) === bizDigits && u.companyName
-    );
-    const resolvedCompanyName =
-      data.companyName?.trim() ||
-      existingLimit?.companyName ||
-      existingUserWithCompany?.companyName ||
-      '회사';
-
-    const newUser: User = {
-      id: `usr-${Date.now()}`,
-      email: trimmedEmail,
-      name: data.name.trim(),
-      businessNumber: formattedBiz,
-      companyName: resolvedCompanyName,
-      department: data.department ? data.department.trim() : '일반부서',
-      position: data.position ? data.position.trim() : '사원',
-      role: data.role,
-      joinedDate: new Date().toISOString().split('T')[0],
-      totalLeaveDays: data.totalLeaveDays ?? 15,
-      usedLeaveDays: 0,
-      status: accountStatus,
-      password: data.password ? data.password.trim() : 'password123',
-    };
-
-    setUsers((prev) => [...prev, newUser]);
-
-    if (data.companyName?.trim()) {
-      setBusinessAdminLimits((prev) => {
-        const found = prev.some((b) => normalizeBizNum(b.businessNumber) === bizDigits);
-        if (found) {
-          return prev.map((b) =>
-            normalizeBizNum(b.businessNumber) === bizDigits
-              ? { ...b, companyName: data.companyName!.trim() }
-              : b
-          );
-        } else {
-          return [
-            ...prev,
-            {
-              businessNumber: formattedBiz,
-              companyName: data.companyName!.trim(),
-              maxAdminCount: 1,
-              updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
-            },
-          ];
-        }
-      });
-    }
-
-    auditLog?.addAuditLog({
-      actionType: 'ACCOUNT_CREATE',
-      actionTitle: isEmployee ? '신규 직원 계정 가입 신청' : '관리자 계정 신규 생성',
-      userId: newUser.id,
-      userName: newUser.name,
-      userEmail: newUser.email,
-      userDepartment: newUser.department,
-      userPosition: newUser.position,
-      userRole: newUser.role,
-      operatorId: newUser.id,
-      operatorName: `${newUser.name} (가입자)`,
-      operatorRole: 'SELF',
-      ipAddress: '192.168.1.20',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `${newUser.name} (${newUser.department} / ${newUser.position}) 계정이 생성되었습니다. (상태: ${accountStatus})`,
-    });
-
-    if (!isEmployee) {
-      setCurrentUserId(newUser.id);
-      return { success: true, isPending: false };
-    } else {
-      return { success: true, isPending: true };
-    }
+    return { success: true, isPending: true };
   };
 
-  const logout = () => {
-    if (currentUser) {
-      auditLog?.addAuditLog({
-        actionType: 'LOGOUT',
-        actionTitle: '로그아웃',
-        userId: currentUser.id,
-        userName: currentUser.name,
-        userEmail: currentUser.email,
-        userDepartment: currentUser.department,
-        userPosition: currentUser.position,
-        userRole: currentUser.role,
-        operatorId: currentUser.id,
-        operatorName: `${currentUser.name} (본인)`,
-        operatorRole: 'SELF',
-        ipAddress: '192.168.1.42',
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-        details: `${currentUser.name} (${currentUser.email}) 계정이 정상 로그아웃 처리되었습니다.`,
-      });
+  const logout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } finally {
+      setCurrentUserId(null);
+      setUsers([]);
     }
-    setCurrentUserId(null);
   };
 
   const switchUser = (userId: string) => {
