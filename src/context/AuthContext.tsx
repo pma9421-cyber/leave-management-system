@@ -984,7 +984,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    return { success: true, isPending: true };
+    return { success: true, isPending: data.role !== 'ADMIN' };
   };
 
   const logout = async () => {
