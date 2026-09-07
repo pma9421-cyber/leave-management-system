@@ -985,12 +985,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, error: '최고관리자 계정은 회원가입으로 생성할 수 없습니다.' };
     }
 
-    const redirectTo = `${window.location.origin}/`;
     const { data: signUpData, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: redirectTo,
         data: {
           name: data.name.trim(),
           business_number: businessNumber,
@@ -1007,8 +1005,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, error: error.message || '회원가입에 실패했습니다.' };
     }
 
-    // Email confirmation is enabled in Supabase. If a session is immediately
-    // available (e.g. confirmation disabled during testing), create the profile now.
+    // 회원가입 이메일 인증을 사용하지 않는 운영 방식입니다.
+    // Supabase의 Confirm email을 OFF로 두면 signUp 직후 세션이 생성되므로
+    // 즉시 profiles를 만들고, 가입 완료 후에는 자동 로그인되지 않도록 로그아웃합니다.
     if (signUpData.session?.user) {
       try {
         await ensureProfileForAuthUser(signUpData.session.user);
@@ -1016,6 +1015,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (e: any) {
         return { success: false, error: e?.message || '프로필 생성에 실패했습니다.' };
       }
+    }
+
+    if (!signUpData.session?.user) {
+      return {
+        success: false,
+        error: 'Supabase의 Confirm email 설정이 켜져 있습니다. Authentication > Sign In / Providers에서 Confirm email을 OFF로 변경해 주세요.',
+      };
     }
 
     return { success: true, isPending: data.role !== 'ADMIN' };
