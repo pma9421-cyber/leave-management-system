@@ -8,7 +8,6 @@ import {
   UserYearQuota,
   YearTransitionPolicy,
 } from '../types.ts';
-import { INITIAL_USERS } from '../data/initialData.ts';
 import { useAuditLogSafe } from './AuditLogContext.tsx';
 import { supabase } from '../lib/supabase.ts';
 
@@ -102,10 +101,10 @@ interface AuthContextType {
 
   // Password reset feature
   passwordResetRequests: PasswordResetRequest[];
-  requestPasswordReset: (businessNumber: string, email: string, name: string) => { success: boolean; error?: string; requestId?: string };
-  issueTempPassword: (requestId: string, customTempPw?: string) => { success: boolean; tempPassword?: string; error?: string };
-  completePasswordChange: (userId: string, newPassword: string) => { success: boolean; error?: string };
-  resetPasswordDirect: (businessNumber: string, email: string, tempPassword: string, newPassword: string) => { success: boolean; error?: string };
+  requestPasswordReset: (businessNumber: string, email: string, name: string) => Promise<{ success: boolean; error?: string; requestId?: string }>;
+  issueTempPassword: (requestId: string, customTempPw?: string) => Promise<{ success: boolean; tempPassword?: string; error?: string }>;
+  completePasswordChange: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  resetPasswordDirect: (businessNumber: string, email: string, tempPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
 
   // Business admin limits
   businessAdminLimits: BusinessAdminLimit[];
@@ -118,7 +117,6 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const USERS_STORAGE_KEY = 'leave_app_users_prod_v1';
 const CURRENT_USER_KEY = 'leave_app_session_user_id_prod_v1';
-const PW_RESETS_KEY = 'leave_app_pw_resets_prod_v1';
 const BIZ_LIMITS_KEY = 'leave_app_biz_limits_prod_v1';
 const YEAR_POLICY_KEY = 'leave_app_year_policy_prod_v1';
 
@@ -131,8 +129,6 @@ export const DEFAULT_YEAR_POLICY: YearTransitionPolicy = {
   lastTransitionAt: undefined,
   isTransitionCompleted: false,
 };
-
-const INITIAL_PW_RESETS: PasswordResetRequest[] = [];
 
 const INITIAL_BIZ_LIMITS: BusinessAdminLimit[] = [
   {
@@ -296,6 +292,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           await supabase.auth.signOut();
           return;
         }
+        if (profile.require_password_change) {
+          setCurrentUserId(null);
+          return;
+        }
         setCurrentUserId(authUser.id);
         await refreshUsersFromSupabase();
       } catch (e) {
@@ -343,6 +343,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await supabase.auth.signOut();
             return;
           }
+          if (profile.require_password_change) {
+            setCurrentUserId(null);
+            return;
+          }
           setCurrentUserId(authUser.id);
           await refreshUsersFromSupabase();
         } catch (e) {
@@ -357,18 +361,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Password reset requests
-  const [passwordResetRequests, setPasswordResetRequests] = useState<PasswordResetRequest[]>(() => {
-    try {
-      const saved = localStorage.getItem(PW_RESETS_KEY);
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch (e) {
-      console.error('Failed to load password reset requests', e);
-    }
-    return INITIAL_PW_RESETS;
+  // Password reset requests are stored in Supabase so every administrator sees the same queue.
+  const [passwordResetRequests, setPasswordResetRequests] = useState<PasswordResetRequest[]>([]);
+
+  const mapPasswordResetRow = (r: any): PasswordResetRequest => ({
+    id: r.id,
+    userId: r.user_id,
+    userName: r.user_name || '',
+    userEmail: r.user_email || '',
+    businessNumber: formatBizNum(r.business_number || ''),
+    userRole: r.user_role as UserRole,
+    requestedAt: r.requested_at ? new Date(r.requested_at).toLocaleString('ko-KR') : '',
+    status: r.status,
+    issuedAt: r.issued_at ? new Date(r.issued_at).toLocaleString('ko-KR') : undefined,
+    issuedBy: r.issued_by_name || undefined,
+    completedAt: r.completed_at ? new Date(r.completed_at).toLocaleString('ko-KR') : undefined,
   });
+
+  const refreshPasswordResetRequests = async () => {
+    const { data, error } = await supabase.rpc('list_password_reset_requests');
+    if (error) throw error;
+    setPasswordResetRequests((data || []).map(mapPasswordResetRow));
+  };
 
   // Business admin limits
   const [businessAdminLimits, setBusinessAdminLimits] = useState<BusinessAdminLimit[]>(() => {
@@ -382,15 +396,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     return INITIAL_BIZ_LIMITS;
   });
-
-  // Save password resets
-  useEffect(() => {
-    try {
-      localStorage.setItem(PW_RESETS_KEY, JSON.stringify(passwordResetRequests));
-    } catch (e) {
-      console.error('Failed to save password resets', e);
-    }
-  }, [passwordResetRequests]);
 
   // Save business limits
   useEffect(() => {
@@ -425,6 +430,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [users, currentUserId]);
 
   const isAuthenticated = !!currentUser;
+
+  useEffect(() => {
+    if (!currentUser || (currentUser.role !== 'ADMIN' && currentUser.role !== 'SUPER_ADMIN')) {
+      setPasswordResetRequests([]);
+      return;
+    }
+    void refreshPasswordResetRequests().catch((e) =>
+      console.error('Failed to load password reset requests', e)
+    );
+  }, [currentUser?.id, currentUser?.role]);
 
   // Filter users:
   // Company scope only sees accounts sharing the exact same businessNumber.
@@ -599,311 +614,159 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  // 1. Password reset request by employee or admin (admin cannot be requested this way)
-  const requestPasswordReset = (
+  // 1. Password reset request: unauthenticated user -> administrator queue in Supabase.
+  const requestPasswordReset = async (
     businessNumber: string,
     email: string,
     name: string
-  ): { success: boolean; error?: string; requestId?: string } => {
-    // Handle argument ordering resilience (if email and bizNum are swapped)
-    let resolvedBiz = (businessNumber || '').trim();
-    let resolvedEmail = (email || '').trim();
-    if (resolvedBiz.includes('@') && !resolvedEmail.includes('@')) {
-      const temp = resolvedBiz;
-      resolvedBiz = resolvedEmail;
-      resolvedEmail = temp;
+  ): Promise<{ success: boolean; error?: string; requestId?: string }> => {
+    const biz = normalizeBizNum(businessNumber);
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    const cleanName = (name || '').trim();
+
+    if (biz.length !== 10 || !normalizedEmail || !cleanName) {
+      return { success: false, error: '사업자등록번호, 가입 이메일, 성명을 모두 정확히 입력해 주세요.' };
     }
 
-    const trimmedEmail = resolvedEmail.toLowerCase();
-    const bizDigits = normalizeBizNum(resolvedBiz);
-    const cleanInputName = (name || '').trim().replace(/\s+/g, '');
-
-    if (!trimmedEmail) {
-      return { success: false, error: '가입된 회사 이메일을 입력해 주세요.' };
-    }
-    if (!cleanInputName) {
-      return { success: false, error: '가입자 성명을 입력해 주세요.' };
-    }
-
-    // 1) First attempt: match by both email and businessNumber digits
-    let found = users.find(
-      (u) =>
-        u.email.trim().toLowerCase() === trimmedEmail &&
-        normalizeBizNum(u.businessNumber) === bizDigits
-    );
-
-    // 2) Fallback attempt: if business number had spacing/formatting or was omitted, match by email
-    if (!found) {
-      const emailMatches = users.filter((u) => u.email.trim().toLowerCase() === trimmedEmail);
-      if (emailMatches.length === 1) {
-        found = emailMatches[0];
-      } else if (emailMatches.length > 1 && bizDigits) {
-        found = emailMatches.find(
-          (u) =>
-            normalizeBizNum(u.businessNumber).includes(bizDigits) ||
-            bizDigits.includes(normalizeBizNum(u.businessNumber))
-        );
-      }
-    }
-
-    if (!found) {
-      return {
-        success: false,
-        error: `입력하신 사업자번호 및 이메일(${trimmedEmail})과 일치하는 계정을 찾을 수 없습니다. 신규 사용자이신 경우 먼저 [회원가입]을 진행해 주세요.`,
-      };
-    }
-
-    const foundCleanName = (found.name || '').trim().replace(/\s+/g, '');
-    const nameMatches =
-      foundCleanName === cleanInputName ||
-      foundCleanName.includes(cleanInputName) ||
-      cleanInputName.includes(foundCleanName);
-
-    if (!nameMatches) {
-      return {
-        success: false,
-        error: `입력하신 성명(${name.trim()})이 등록된 계정 정보(${found.name})와 일치하지 않습니다.`,
-      };
-    }
-
-    if (found.role === 'SUPER_ADMIN') {
-      return {
-        success: false,
-        error: '최고 관리자(admin) 계정은 이 경로로 비밀번호를 초기화할 수 없습니다.',
-      };
-    }
-
-    // Check if there is already a pending request
-    const existingPending = passwordResetRequests.find(
-      (r) => r.userId === found!.id && r.status === 'PENDING'
-    );
-    if (existingPending) {
-      return {
-        success: true,
-        requestId: existingPending.id,
-        error: '이미 접수된 비밀번호 재설정 신청이 있습니다. 최고 관리자의 임시 비밀번호 발급을 기다려 주세요.',
-      };
-    }
-
-    const newReq: PasswordResetRequest = {
-      id: `pwr-${Date.now()}`,
-      userId: found.id,
-      userName: found.name,
-      userEmail: found.email,
-      businessNumber: found.businessNumber,
-      userRole: found.role,
-      requestedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
-      status: 'PENDING',
-    };
-
-    setPasswordResetRequests((prev) => [newReq, ...prev]);
-
-    auditLog?.addAuditLog({
-      actionType: 'PASSWORD_RESET',
-      actionTitle: '비밀번호 재설정 신청 접수',
-      userId: found.id,
-      userName: found.name,
-      userEmail: found.email,
-      userDepartment: found.department,
-      userPosition: found.position,
-      userRole: found.role,
-      operatorId: found.id,
-      operatorName: `${found.name} (신청자)`,
-      operatorRole: 'SELF',
-      ipAddress: '192.168.1.55',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `${found.name} (${found.email}, ${found.role}) 계정에서 비밀번호 재설정을 신청하였습니다. (임시번호 발급 대기중)`,
+    const { data, error } = await supabase.rpc('request_password_reset_by_identity', {
+      p_business_number: biz,
+      p_email: normalizedEmail,
+      p_name: cleanName,
     });
 
-    return { success: true, requestId: newReq.id };
+    if (error) {
+      return { success: false, error: error.message || '비밀번호 재설정 신청에 실패했습니다.' };
+    }
+    const result: any = data || {};
+    if (result.success === false) {
+      return { success: false, error: result.error || '가입 정보를 확인할 수 없습니다.' };
+    }
+    return {
+      success: true,
+      requestId: result.request_id || undefined,
+      error: result.already_pending ? '이미 접수된 신청이 있습니다. 관리자에게 임시 비밀번호를 문의해 주세요.' : undefined,
+    };
   };
 
-  // 2. Issue temporary password by SUPER_ADMIN
-  const issueTempPassword = (
+  // 2. Administrator issues a real temporary Supabase Auth password.
+  // The service-role key exists only in Cloudflare Pages Functions and is never exposed to the browser.
+  const issueTempPassword = async (
     requestId: string,
     customTempPw?: string
-  ): { success: boolean; tempPassword?: string; error?: string } => {
-    const req = passwordResetRequests.find((r) => r.id === requestId);
-    if (!req) return { success: false, error: '신청 내역을 찾을 수 없습니다.' };
+  ): Promise<{ success: boolean; tempPassword?: string; error?: string }> => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) return { success: false, error: '관리자 로그인이 필요합니다.' };
 
-    const targetUser = users.find((u) => u.id === req.userId);
-    if (!targetUser) return { success: false, error: '해당 사용자를 찾을 수 없습니다.' };
+      const response = await fetch('/api/admin/issue-temp-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          requestId,
+          customTempPassword: customTempPw?.trim() || undefined,
+        }),
+      });
+      const payload: any = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.success) {
+        return { success: false, error: payload.error || '임시 비밀번호 발급에 실패했습니다.' };
+      }
 
-    // Generate random 8-character temporary password if not provided
-    const tempPw = customTempPw?.trim() || `temp${Math.floor(100000 + Math.random() * 900000)}!`;
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
-
-    // Update user
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === targetUser.id
-          ? {
-              ...u,
-              tempPassword: tempPw,
-              requirePasswordChange: true,
-            }
-          : u
-      )
-    );
-
-    // Update request status
-    setPasswordResetRequests((prev) =>
-      prev.map((r) =>
-        r.id === requestId
-          ? {
-              ...r,
-              status: 'ISSUED',
-              tempPassword: tempPw,
-              issuedAt: now,
-              issuedBy: currentUser?.name || 'admin',
-            }
-          : r
-      )
-    );
-
-    auditLog?.addAuditLog({
-      actionType: 'PASSWORD_RESET',
-      actionTitle: '임시 비밀번호 발급 완료',
-      userId: targetUser.id,
-      userName: targetUser.name,
-      userEmail: targetUser.email,
-      userDepartment: targetUser.department,
-      userPosition: targetUser.position,
-      userRole: targetUser.role,
-      operatorId: currentUser?.id || 'admin',
-      operatorName: currentUser ? `${currentUser.name} (최고관리자)` : 'admin (최고관리자)',
-      operatorRole: 'SUPER_ADMIN',
-      ipAddress: '192.168.1.1',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `최고 관리자(admin)가 ${targetUser.name} (${targetUser.email}) 계정에 임시 비밀번호를 발급하였습니다. (로그인 후 새 비밀번호 설정 필수)`,
-    });
-
-    return { success: true, tempPassword: tempPw };
+      await refreshPasswordResetRequests();
+      return { success: true, tempPassword: payload.tempPassword };
+    } catch (e: any) {
+      return { success: false, error: e?.message || '임시 비밀번호 발급 중 오류가 발생했습니다.' };
+    }
   };
 
-  // 3. User sets new permanent password after logging in or via reset screen
-  const completePasswordChange = (
+  // 3. Logged-in user changes their own password.
+  const completePasswordChange = async (
     userId: string,
     newPassword: string
-  ): { success: boolean; error?: string } => {
-    const trimmedPw = newPassword.trim();
-    if (!trimmedPw || trimmedPw.length < 4) {
-      return { success: false, error: '새 비밀번호는 최소 4자리 이상이어야 합니다.' };
+  ): Promise<{ success: boolean; error?: string }> => {
+    const trimmed = (newPassword || '').trim();
+    if (trimmed.length < 6) {
+      return { success: false, error: '새 비밀번호는 최소 6자리 이상이어야 합니다.' };
+    }
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData.user || authData.user.id !== userId) {
+      return { success: false, error: '비밀번호를 변경할 로그인 세션이 없습니다.' };
     }
 
-    const targetUser = users.find((u) => u.id === userId);
-    if (!targetUser) return { success: false, error: '사용자를 찾을 수 없습니다.' };
+    const { error } = await supabase.auth.updateUser({ password: trimmed });
+    if (error) return { success: false, error: error.message };
 
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
-
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === userId
-          ? {
-              ...u,
-              password: trimmedPw,
-              tempPassword: undefined,
-              requirePasswordChange: false,
-            }
-          : u
-      )
-    );
-
-    // Mark any related reset requests as COMPLETED
-    setPasswordResetRequests((prev) =>
-      prev.map((r) =>
-        r.userId === userId && r.status === 'ISSUED'
-          ? {
-              ...r,
-              status: 'COMPLETED',
-              completedAt: now,
-            }
-          : r
-      )
-    );
-
-    auditLog?.addAuditLog({
-      actionType: 'PASSWORD_RESET',
-      actionTitle: '새 비밀번호 등록 및 변경 완료',
-      userId: targetUser.id,
-      userName: targetUser.name,
-      userEmail: targetUser.email,
-      userDepartment: targetUser.department,
-      userPosition: targetUser.position,
-      userRole: targetUser.role,
-      operatorId: targetUser.id,
-      operatorName: `${targetUser.name} (본인)`,
-      operatorRole: 'SELF',
-      ipAddress: '192.168.1.55',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `${targetUser.name} 사용자가 발급받은 임시 번호를 통해 안전한 새 비밀번호로 변경을 완료했습니다.`,
-    });
-
+    const { error: completeError } = await supabase.rpc('complete_temp_password_change');
+    if (completeError) return { success: false, error: completeError.message };
     return { success: true };
   };
 
-  // 4. Direct password change on login screen with temp password
-  const resetPasswordDirect = (
+  // 4. Login screen: temporary password -> new permanent password.
+  const resetPasswordDirect = async (
     businessNumber: string,
     email: string,
     tempPassword: string,
     newPassword: string
-  ): { success: boolean; error?: string } => {
-    // Handle argument ordering resilience (if email and bizNum are swapped)
-    let resolvedBiz = (businessNumber || '').trim();
-    let resolvedEmail = (email || '').trim();
-    if (resolvedBiz.includes('@') && !resolvedEmail.includes('@')) {
-      const temp = resolvedBiz;
-      resolvedBiz = resolvedEmail;
-      resolvedEmail = temp;
-    }
+  ): Promise<{ success: boolean; error?: string }> => {
+    const biz = normalizeBizNum(businessNumber);
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    const tempPw = (tempPassword || '').trim();
+    const newPw = (newPassword || '').trim();
 
-    const trimmedEmail = resolvedEmail.toLowerCase();
-    const bizDigits = normalizeBizNum(resolvedBiz);
-    const trimmedTemp = (tempPassword || '').trim();
-    const trimmedNew = (newPassword || '').trim();
-
-    if (!trimmedEmail || !trimmedTemp || !trimmedNew) {
+    if (biz.length !== 10 || !normalizedEmail || !tempPw || !newPw) {
       return { success: false, error: '모든 입력 항목을 기재해 주세요.' };
     }
-
-    if (trimmedNew.length < 4) {
-      return { success: false, error: '새 비밀번호는 최소 4자리 이상이어야 합니다.' };
+    if (newPw.length < 6) {
+      return { success: false, error: '새 비밀번호는 최소 6자리 이상이어야 합니다.' };
+    }
+    if (tempPw === newPw) {
+      return { success: false, error: '새 비밀번호는 임시 비밀번호와 다르게 설정해 주세요.' };
     }
 
-    let found = users.find(
-      (u) =>
-        u.email.trim().toLowerCase() === trimmedEmail &&
-        normalizeBizNum(u.businessNumber) === bizDigits
-    );
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: normalizedEmail,
+      password: tempPw,
+    });
+    if (error || !data.user) {
+      return { success: false, error: '임시 비밀번호가 올바르지 않습니다.' };
+    }
 
-    if (!found) {
-      const byEmail = users.filter((u) => u.email.trim().toLowerCase() === trimmedEmail);
-      if (byEmail.length === 1) {
-        found = byEmail[0];
+    try {
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id,company_id,require_password_change')
+        .eq('id', data.user.id)
+        .single();
+      if (profileError) throw profileError;
+
+      const { data: company, error: companyError } = await supabase
+        .from('companies')
+        .select('business_number')
+        .eq('id', profile.company_id)
+        .single();
+      if (companyError) throw companyError;
+
+      if (normalizeBizNum(company.business_number) !== biz) {
+        throw new Error('사업자등록번호와 계정 정보가 일치하지 않습니다.');
       }
-    }
+      if (!profile.require_password_change) {
+        throw new Error('현재 계정에는 유효한 임시 비밀번호 변경 요청이 없습니다.');
+      }
 
-    if (!found) {
-      return { success: false, error: '일치하는 계정을 찾을 수 없습니다.' };
-    }
+      const result = await completePasswordChange(data.user.id, newPw);
+      if (!result.success) throw new Error(result.error || '새 비밀번호 변경에 실패했습니다.');
 
-    // Verify temp password
-    const reqWithTemp = passwordResetRequests.find(
-      (r) => r.userId === found!.id && r.status === 'ISSUED' && r.tempPassword === trimmedTemp
-    );
-    const matchesUserTemp = found.tempPassword && found.tempPassword === trimmedTemp;
-
-    if (!matchesUserTemp && !reqWithTemp) {
-      return { success: false, error: '발급된 임시 비밀번호가 일치하지 않습니다. 다시 확인해 주세요.' };
+      await supabase.auth.signOut();
+      setCurrentUserId(null);
+      setUsers([]);
+      return { success: true };
+    } catch (e: any) {
+      await supabase.auth.signOut();
+      return { success: false, error: e?.message || '비밀번호 변경에 실패했습니다.' };
     }
-
-    const res = completePasswordChange(found.id, trimmedNew);
-    if (res.success) {
-      // Auto log in
-      setCurrentUserId(found.id);
-    }
-    return res;
   };
 
   const login = async (email: string, password?: string, businessNumber?: string) => {
@@ -949,6 +812,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (profile.status === 'INACTIVE') {
         await supabase.auth.signOut();
         return { success: false, error: '비활성화된 계정입니다. 관리자에게 문의해 주세요.' };
+      }
+      if (profile.require_password_change) {
+        await supabase.auth.signOut();
+        return { success: false, error: '임시 비밀번호가 발급된 계정입니다. [비밀번호 찾기]에서 임시 비밀번호로 새 비밀번호를 등록해 주세요.' };
       }
 
       setCurrentUserId(data.user.id);
