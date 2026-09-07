@@ -175,14 +175,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const saved = localStorage.getItem(USERS_STORAGE_KEY);
       if (saved) {
         const parsed: User[] = JSON.parse(saved);
-        // Find existing master account to preserve password if changed, or use INITIAL_USERS[0]
-        const superAdmin = parsed.find((u) => u.role === 'SUPER_ADMIN' || u.email === 'admin@segyotax.com');
-        const masterAccount: User = {
-          ...INITIAL_USERS[0],
-          ...(superAdmin?.password ? { password: superAdmin.password } : {}),
-        };
-        // Retain only the master super admin (removes all test accounts)
-        return [masterAccount];
+  return parsed;
       }
     } catch (e) {
       console.error('Failed to load users from localStorage', e);
