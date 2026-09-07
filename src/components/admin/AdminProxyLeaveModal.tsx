@@ -106,7 +106,7 @@ export const AdminProxyLeaveModal: React.FC<AdminProxyLeaveModalProps> = ({
   const effectiveDeduction = calculateLeaveDeduction(selectedType, calculatedDays);
   const isOverQuota = effectiveDeduction > 0 && effectiveDeduction > remainingDays;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
@@ -132,7 +132,7 @@ export const AdminProxyLeaveModal: React.FC<AdminProxyLeaveModalProps> = ({
 
     // 잔여 연차 초과 신청 허용 (남은 연차가 마이너스로 기록됨)
     setIsSubmitting(true);
-    const res = adminProxySubmitLeave({
+    const res = await adminProxySubmitLeave({
       targetUserId: targetUser.id,
       leaveTypeId: selectedType.id,
       startDate,
