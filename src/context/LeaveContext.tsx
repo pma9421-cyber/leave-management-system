@@ -4,6 +4,7 @@ import { INITIAL_LEAVE_TYPES, INITIAL_LEAVE_REQUESTS } from '../data/initialData
 import { calculateLeaveDeduction } from '../utils/leaveUtils.ts';
 import { useAuth } from './AuthContext.tsx';
 import { useAuditLogSafe } from './AuditLogContext.tsx';
+import { supabase } from '../lib/supabase.ts';
 
 interface LeaveContextType {
   leaveTypes: LeaveType[];
@@ -27,7 +28,7 @@ interface LeaveContextType {
     reason?: string;
     requestedDays: number;
     immediateApprove?: boolean;
-  }) => { success: boolean; error?: string };
+  }) => Promise<{ success: boolean; error?: string }>;
   updateLeaveRequest: (
     requestId: string,
     data: {
@@ -137,6 +138,90 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [quotaAdjustments]);
 
+
+  // Supabase에 저장된 관리자 대리 휴가신청을 다시 불러옵니다.
+  // 기존 브라우저 localStorage 데이터와 병합하므로 과거 로컬 데이터도 즉시 사라지지 않습니다.
+  useEffect(() => {
+    if (!currentUser) return;
+    let cancelled = false;
+
+    const hydrateProxyRequests = async () => {
+      try {
+        const { data: rows, error } = await supabase
+          .from('leave_requests')
+          .select('*')
+          .eq('is_proxy', true)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        if (cancelled) return;
+
+        const typeIds = [...new Set((rows || []).map((r: any) => r.leave_type_id).filter(Boolean))];
+        const { data: typeRows, error: typeError } = typeIds.length
+          ? await supabase.from('leave_types').select('*').in('id', typeIds)
+          : ({ data: [], error: null } as any);
+        if (typeError) throw typeError;
+        if (cancelled) return;
+
+        const typeMap = new Map<string, LeaveType>();
+        const dbTypes: LeaveType[] = (typeRows || []).map((t: any) => {
+          const mapped: LeaveType = {
+            id: t.id,
+            name: t.name,
+            code: t.code,
+            deductionDays: Number(t.deduction_days || 0),
+            isPaid: Boolean(t.is_paid),
+            description: t.description || '',
+            color: t.color || '#3b82f6',
+            isActive: Boolean(t.is_active),
+            isCustom: Boolean(t.is_custom),
+          };
+          typeMap.set(t.id, mapped);
+          return mapped;
+        });
+
+        setLeaveTypes((prev) => {
+          const ids = new Set(prev.map((t) => t.id));
+          return [...prev, ...dbTypes.filter((t) => !ids.has(t.id))];
+        });
+
+        const mappedRequests: LeaveRequest[] = (rows || []).map((r: any) => {
+          const u = users.find((user) => user.id === r.user_id);
+          const t = typeMap.get(r.leave_type_id);
+          return {
+            id: r.id,
+            userId: r.user_id,
+            userName: u?.name || '직원',
+            userDepartment: u?.department,
+            userPosition: u?.position || '사원',
+            leaveTypeId: r.leave_type_id,
+            leaveTypeName: t?.name || '휴가',
+            startDate: r.start_date,
+            endDate: r.end_date,
+            requestedDays: Number(r.requested_days || 0),
+            reason: r.reason || '',
+            status: r.status,
+            appliedAt: r.created_at ? String(r.created_at).replace('T', ' ').slice(0, 19) : '',
+            processedAt: r.processed_at ? String(r.processed_at).replace('T', ' ').slice(0, 19) : undefined,
+            processedBy: r.processed_by ? '관리자' : undefined,
+            rejectionReason: r.rejection_reason || undefined,
+          };
+        });
+
+        setLeaveRequests((prev) => {
+          const dbIds = new Set(mappedRequests.map((r) => r.id));
+          return [...mappedRequests, ...prev.filter((r) => !dbIds.has(r.id))];
+        });
+      } catch (e) {
+        console.error('Failed to hydrate proxy leave requests from Supabase', e);
+      }
+    };
+
+    void hydrateProxyRequests();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id, users.length]);
+
   // Add extensible custom leave type
   const addLeaveType = (newType: Omit<LeaveType, 'id'>) => {
     const trimmedName = newType.name.trim();
@@ -179,8 +264,8 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   };
 
-  // Admin proxy leave request (대리 신청)
-  const adminProxySubmitLeave = (data: {
+  // Admin proxy leave request (대리 신청) - Supabase 중앙 DB 영구 저장
+  const adminProxySubmitLeave = async (data: {
     targetUserId: string;
     leaveTypeId: string;
     startDate: string;
@@ -188,91 +273,67 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     reason: string;
     requestedDays: number;
     immediateApprove?: boolean;
-  }) => {
-    if (!currentUser || currentUser.role !== 'ADMIN') {
+  }): Promise<{ success: boolean; error?: string }> => {
+    if (!currentUser || !['ADMIN', 'SUPER_ADMIN'].includes(currentUser.role)) {
       return { success: false, error: '관리자 권한이 필요합니다.' };
     }
 
     const targetUser = users.find((u) => u.id === data.targetUserId);
-    if (!targetUser) {
-      return { success: false, error: '대상 직원을 찾을 수 없습니다.' };
-    }
+    if (!targetUser) return { success: false, error: '대상 직원을 찾을 수 없습니다.' };
 
     const leaveType = leaveTypes.find((t) => t.id === data.leaveTypeId);
-    if (!leaveType) {
-      return { success: false, error: '유효하지 않은 휴가 유형입니다.' };
-    }
+    if (!leaveType) return { success: false, error: '유효하지 않은 휴가 유형입니다.' };
+    if (!data.startDate || !data.endDate) return { success: false, error: '휴가 날짜를 지정해 주세요.' };
+    if (data.requestedDays <= 0) return { success: false, error: '유효한 휴가 일수를 계산할 수 없습니다.' };
 
-    if (!data.startDate || !data.endDate) {
-      return { success: false, error: '휴가 날짜를 지정해 주세요.' };
-    }
-
-    if (data.requestedDays <= 0) {
-      return { success: false, error: '유효한 휴가 일수를 계산할 수 없습니다.' };
-    }
-
-    const reqYear = data.startDate ? parseInt(data.startDate.slice(0, 4), 10) : workYear;
-    const quota = getUserQuota(targetUser.id, reqYear);
-    const remainingDays = Number((quota.totalLeaveDays - quota.usedLeaveDays).toFixed(1));
+    const reqYear = parseInt(data.startDate.slice(0, 4), 10) || workYear;
     const effectiveDeduction = calculateLeaveDeduction(leaveType, data.requestedDays);
-
-    // 연차 초과(가불/마이너스) 사용 지원: 잔여 연차를 초과해도 신청 및 결재 가능하며 남은 연차가 음수(-)로 표기됨
-    // (익년도 이월 시 음수 연차가 그대로 이월되어 자동 차감 정산)
-
-    const now = new Date();
-    const formattedNow = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-      now.getDate()
-    ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(
-      now.getMinutes()
-    ).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-
     const isAutoApprove = data.immediateApprove !== false;
 
-    const newRequest: LeaveRequest = {
-      id: `req-${Date.now()}`,
-      userId: targetUser.id,
-      userName: targetUser.name,
-      userDepartment: targetUser.department,
-      userPosition: targetUser.position,
-      leaveTypeId: leaveType.id,
-      leaveTypeName: leaveType.name,
-      startDate: data.startDate,
-      endDate: data.endDate,
-      requestedDays: data.requestedDays,
-      reason: data.reason?.trim() || '',
-      status: isAutoApprove ? 'APPROVED' : 'PENDING',
-      appliedAt: formattedNow,
-      processedAt: isAutoApprove ? formattedNow : undefined,
-      processedBy: isAutoApprove ? `${currentUser.name} (관리자 대리 등록)` : undefined,
-    };
+    try {
+      const { data: requestId, error } = await supabase.rpc('admin_proxy_submit_leave', {
+        p_user_id: targetUser.id,
+        p_leave_type_code: leaveType.code,
+        p_leave_type_name: leaveType.name,
+        p_deduction_days: leaveType.deductionDays,
+        p_start_date: data.startDate,
+        p_end_date: data.endDate,
+        p_requested_days: data.requestedDays,
+        p_reason: data.reason?.trim() || null,
+        p_immediate_approve: isAutoApprove,
+      });
+      if (error) throw error;
 
-    setLeaveRequests((prev) => [newRequest, ...prev]);
+      const now = new Date();
+      const formattedNow = now.toISOString().replace('T', ' ').slice(0, 19);
+      const newRequest: LeaveRequest = {
+        id: String(requestId),
+        userId: targetUser.id,
+        userName: targetUser.name,
+        userDepartment: targetUser.department,
+        userPosition: targetUser.position,
+        leaveTypeId: leaveType.id,
+        leaveTypeName: leaveType.name,
+        startDate: data.startDate,
+        endDate: data.endDate,
+        requestedDays: data.requestedDays,
+        reason: data.reason?.trim() || '',
+        status: isAutoApprove ? 'APPROVED' : 'PENDING',
+        appliedAt: formattedNow,
+        processedAt: isAutoApprove ? formattedNow : undefined,
+        processedBy: isAutoApprove ? `${currentUser.name} (관리자 대리 등록)` : undefined,
+      };
 
-    if (isAutoApprove && effectiveDeduction > 0) {
-      updateUserUsedDays(targetUser.id, effectiveDeduction, reqYear);
-    }
+      setLeaveRequests((prev) => [newRequest, ...prev.filter((r) => r.id !== newRequest.id)]);
 
-    const proxyTimestamp = reqYear === 2027 ? `${data.startDate} 09:00:00` : undefined;
-    auditLog?.addAuditLog({
-      actionType: 'LEAVE_APPLY',
-      actionTitle: `[관리자 대리 신청] ${reqYear}년도 휴가 등록 (${targetUser.name})`,
-      userId: targetUser.id,
-      userName: targetUser.name,
-      userDepartment: targetUser.department,
-      userPosition: targetUser.position,
-      operatorId: currentUser.id,
-      operatorName: `${currentUser.name} (${currentUser.position})`,
-      operatorRole: currentUser.role,
-      timestamp: proxyTimestamp,
-      ipAddress: '192.168.1.12',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `관리자가 ${targetUser.name} 직원의 ${reqYear}년도 ${leaveType.name} ${data.requestedDays}일 (${data.startDate} ~ ${data.endDate}) 대리 신청을 등록하였습니다.`,
-    });
+      // 화면은 즉시 갱신하고, 실제 영구 데이터는 위 RPC에서 이미 DB에 반영됩니다.
+      if (isAutoApprove && effectiveDeduction > 0) {
+        updateUserUsedDays(targetUser.id, effectiveDeduction, reqYear);
+      }
 
-    if (isAutoApprove) {
       auditLog?.addAuditLog({
-        actionType: 'LEAVE_APPROVE',
-        actionTitle: `[대리 등록 즉시 승인] ${reqYear}년도 휴가 결재 (${targetUser.name})`,
+        actionType: 'LEAVE_APPLY',
+        actionTitle: `[관리자 대리 신청] ${reqYear}년도 휴가 등록 (${targetUser.name})`,
         userId: targetUser.id,
         userName: targetUser.name,
         userDepartment: targetUser.department,
@@ -280,14 +341,16 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         operatorId: currentUser.id,
         operatorName: `${currentUser.name} (${currentUser.position})`,
         operatorRole: currentUser.role,
-        timestamp: proxyTimestamp,
         ipAddress: '192.168.1.12',
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-        details: `${targetUser.name} 직원의 ${reqYear}년도 ${leaveType.name} ${data.requestedDays}일 신청이 즉시 승인 및 ${effectiveDeduction}일 차감 처리되었습니다.`,
+        details: `관리자가 ${targetUser.name} 직원의 ${reqYear}년도 ${leaveType.name} ${data.requestedDays}일을 대리 등록했으며 중앙 DB에 저장되었습니다.`,
       });
-    }
 
-    return { success: true };
+      return { success: true };
+    } catch (e: any) {
+      console.error('Failed to persist proxy leave request', e);
+      return { success: false, error: e?.message || '대리 휴가 신청을 중앙 DB에 저장하지 못했습니다.' };
+    }
   };
 
   // Submit leave request as Employee
