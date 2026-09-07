@@ -49,7 +49,7 @@ interface AuthContextType {
     carried: number,
     compensatory: number,
     year?: number
-  ) => void;
+  ) => Promise<{ success: boolean; error?: string }>;
   rolloverLeaveToNextYear: (userId?: string, nextYear?: number) => { success: boolean; message?: string };
   updateUserUsedDays: (userId: string, additionalDays: number, year?: number) => void;
   getUserQuota: (userId: string, year?: number) => UserYearQuota;
@@ -1177,80 +1177,62 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   };
 
-  const updateUserLeaveBreakdown = (
+  const updateUserLeaveBreakdown = async (
     userId: string,
     statutory: number,
     carried: number,
     compensatory: number,
     year: number = 2026
-  ) => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const target = users.find((u) => u.id === userId);
-    if (!target) return;
+    if (!target) return { success: false, error: '대상 직원을 찾을 수 없습니다.' };
 
-    const total = Number((statutory + carried + compensatory).toFixed(1));
     const prevQuota = getUserQuota(userId, year);
-    const prevStatutory = prevQuota.statutoryLeaveDays ?? 15;
-    const prevCarried = prevQuota.carriedOverLeaveDays ?? 0;
-    const prevCompensatory = prevQuota.compensatoryLeaveDays ?? 0;
-    const prevTotal = prevQuota.totalLeaveDays;
 
-    setUsers((prev) =>
-      prev.map((u) => {
-        if (u.id === userId) {
-          const existingYearQuota = u.annualQuotas?.[year] || getUserQuota(userId, year);
-          const updatedYearQuota: UserYearQuota = {
-            ...existingYearQuota,
-            year,
-            statutoryLeaveDays: statutory,
-            carriedOverLeaveDays: carried,
-            compensatoryLeaveDays: compensatory,
-            baseQuota: statutory,
-            carryOverDays: carried,
-            totalLeaveDays: total,
-          };
-          const updatedQuotas = {
-            ...(u.annualQuotas || {}),
-            [year]: updatedYearQuota,
-          };
+    try {
+      const { error } = await supabase.rpc('set_leave_quota', {
+        p_user_id: userId,
+        p_year: year,
+        p_statutory: statutory,
+        p_carried: carried,
+        p_compensatory: compensatory,
+        p_reason: `${year}년도 관리자 연차 구성 저장`,
+      });
+      if (error) throw error;
 
-          const isCurrentYear = year === 2026;
-          return {
-            ...u,
-            statutoryLeaveDays: isCurrentYear ? statutory : u.statutoryLeaveDays,
-            carriedOverLeaveDays: isCurrentYear ? carried : u.carriedOverLeaveDays,
-            compensatoryLeaveDays: isCurrentYear ? compensatory : u.compensatoryLeaveDays,
-            totalLeaveDays: isCurrentYear ? total : u.totalLeaveDays,
-            annualQuotas: updatedQuotas,
-          };
-        }
-        return u;
-      })
-    );
+      await refreshUsersFromSupabase();
 
-    auditLog?.addAuditLog({
-      actionType: 'QUOTA_CHANGE',
-      actionTitle: `${year}년도 연차 상세 구성 조정 (법정/이월/보상)`,
-      userId: target.id,
-      userName: target.name,
-      userEmail: target.email,
-      userDepartment: target.department,
-      userPosition: target.position,
-      userRole: target.role,
-      operatorId: currentUser?.id || 'admin',
-      operatorName: currentUser ? `${currentUser.name} (${currentUser.position || '관리자'})` : '관리자',
-      operatorRole: currentUser?.role || 'ADMIN',
-      ipAddress: '192.168.1.12',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `${target.name} 직원의 ${year}년도 연차 구성이 [법정: ${statutory}일, 이월: ${carried > 0 ? `+${carried}` : carried}일, 보상: ${compensatory}일 = 총 ${total}일]로 조정되었습니다.`,
-      diff: {
-        fields: [
-          { label: `${year}년도 법정연차`, key: 'statutoryLeaveDays', before: `${prevStatutory}일`, after: `${statutory}일` },
-          { label: `${year}년도 이월연차`, key: 'carriedOverLeaveDays', before: `${prevCarried > 0 ? `+${prevCarried}` : prevCarried}일`, after: `${carried > 0 ? `+${carried}` : carried}일` },
-          { label: `${year}년도 보상연차`, key: 'compensatoryLeaveDays', before: `${prevCompensatory}일`, after: `${compensatory}일` },
-          { label: `${year}년도 총 부여 연차`, key: 'totalLeaveDays', before: `${prevTotal}일`, after: `${total}일` },
-        ],
-      },
-    });
+      const total = Number((statutory + carried + compensatory).toFixed(1));
+      auditLog?.addAuditLog({
+        actionType: 'QUOTA_CHANGE',
+        actionTitle: `${year}년도 연차 상세 구성 조정 (DB 저장)`,
+        userId: target.id,
+        userName: target.name,
+        userEmail: target.email,
+        userDepartment: target.department,
+        userPosition: target.position,
+        userRole: target.role,
+        operatorId: currentUser?.id || 'admin',
+        operatorName: currentUser ? `${currentUser.name} (${currentUser.position || '관리자'})` : '관리자',
+        operatorRole: currentUser?.role || 'ADMIN',
+        ipAddress: '192.168.1.12',
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
+        details: `${target.name} 직원의 ${year}년도 연차 구성이 중앙 DB에 저장되었습니다. [법정 ${statutory}일 / 이월 ${carried}일 / 보상 ${compensatory}일 / 총 ${total}일]`,
+        diff: {
+          fields: [
+            { label: `${year}년도 법정연차`, key: 'statutoryLeaveDays', before: `${prevQuota.statutoryLeaveDays ?? 0}일`, after: `${statutory}일` },
+            { label: `${year}년도 이월연차`, key: 'carriedOverLeaveDays', before: `${prevQuota.carriedOverLeaveDays ?? 0}일`, after: `${carried}일` },
+            { label: `${year}년도 보상연차`, key: 'compensatoryLeaveDays', before: `${prevQuota.compensatoryLeaveDays ?? 0}일`, after: `${compensatory}일` },
+            { label: `${year}년도 총 부여 연차`, key: 'totalLeaveDays', before: `${prevQuota.totalLeaveDays}일`, after: `${total}일` },
+          ],
+        },
+      });
+
+      return { success: true };
+    } catch (e: any) {
+      console.error('Failed to persist leave quota to Supabase', e);
+      return { success: false, error: e?.message || '연차 정보를 저장하지 못했습니다.' };
+    }
   };
 
   const rolloverLeaveToNextYear = (
