@@ -23,7 +23,10 @@ import {
 export const AuthScreen: React.FC = () => {
   const { login, register } = useAuth();
   const [isLoginMode, setIsLoginMode] = useState(true);
-  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
+  const [isForgotModalOpen, setIsForgotModalOpen] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('password-reset') === '1';
+  });
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showRegPassword, setShowRegPassword] = useState(false);
 
