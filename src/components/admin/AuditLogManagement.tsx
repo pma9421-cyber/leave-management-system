@@ -37,7 +37,6 @@ import {
   ShieldAlert,
   Sparkles,
   Layers,
-  Copy,
   Check,
 } from 'lucide-react';
 
@@ -868,7 +867,7 @@ export const AuditLogManagement: React.FC = () => {
                     <th className="py-3 px-4">신청자 성명 / 메일</th>
                     <th className="py-3 px-4">권한 등급</th>
                     <th className="py-3 px-4">진행 상태</th>
-                    <th className="py-3 px-4">발급된 임시 비밀번호</th>
+                    <th className="py-3 px-4">임시 비밀번호 보안</th>
                     <th className="py-3 px-4 text-center">관리 액션</th>
                   </tr>
                 </thead>
@@ -914,22 +913,12 @@ export const AuditLogManagement: React.FC = () => {
                           )}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
-                          {req.tempPassword ? (
-                            <div className="flex items-center gap-2 font-mono text-xs text-indigo-700 font-bold bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200/60 w-fit">
-                              <span>{req.tempPassword}</span>
-                              <button
-                                onClick={() => {
-                                  navigator.clipboard.writeText(req.tempPassword!);
-                                  showToast('임시 비밀번호가 클립보드에 복사되었습니다.');
-                                }}
-                                className="text-indigo-400 hover:text-indigo-900 cursor-pointer"
-                                title="복사"
-                              >
-                                <Copy className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ) : (
+                          {req.status === 'PENDING' ? (
                             <span className="text-slate-400 text-[11px]">미발급</span>
+                          ) : (
+                            <span className="text-[11px] text-indigo-700 font-semibold">
+                              원문 미저장 · 발급 시 1회 표시
+                            </span>
                           )}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap text-center">
