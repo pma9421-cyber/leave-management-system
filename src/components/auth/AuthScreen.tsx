@@ -110,14 +110,14 @@ export const AuthScreen: React.FC = () => {
     } else {
       if (res.isPending) {
         setRegSuccessMsg(
-          '직원 계정 가입 신청이 완료되었습니다. 이메일 인증 후 회사 관리자의 승인을 받으면 로그인할 수 있습니다.'
+          '직원 계정 가입 신청이 완료되었습니다. 회사 관리자가 승인하면 로그인할 수 있습니다.'
         );
         setIsLoginMode(true);
         setLoginEmail(regEmail.trim());
         setLoginBizNum(regBizNum.trim());
         setLoginPassword('');
       } else {
-        setRegSuccessMsg('관리자 계정 가입이 완료되었습니다. 이메일 인증 후 바로 로그인할 수 있습니다.');
+        setRegSuccessMsg('관리자 계정 가입이 완료되었습니다. 바로 로그인할 수 있습니다.');
         setIsLoginMode(true);
         setLoginEmail(regEmail.trim());
         setLoginBizNum(regBizNum.trim());
