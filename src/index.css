@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+/* 네비게이션 메뉴 컨테이너 (1. 2줄 배치 및 반응형 줄바꿈) */
+.nav-container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px; /* 상하 8px, 좌우 12px 간격 */
+  width: 100%;
+}
+
+/* 방법 A (Grid 권장 - 완전한 격자 형태) */
+.nav-container-grid,
+.nav-container.grid-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px 12px;
+  width: 100%;
+}
+
+/* 네비게이션 메뉴 버튼 공통 (2. 버튼 크기 균일화 & 3. 버튼 내부 정렬) */
+.nav-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap; /* 글자 줄바꿈 방지 */
+  padding: 0 12px;
+  height: 40px;
+  font-size: 14px;
+  flex: 1 1 calc(25% - 12px); /* 방법 B: 한 줄에 4개씩 배치 시 및 일정한 폭 유지 */
+  min-width: 140px;
+  gap: 6px; /* 텍스트 및 뱃지 중앙 정렬 간격 */
+  box-sizing: border-box;
+}
+
+/* 우측 계정/프로필 영역 */
+.user-profile {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  flex-shrink: 0; /* 화면이 줄어들어도 형태 유지 */
+}
+
+/* 드롭다운 부모 요소 기준점 설정 (position: relative) */
+.dropdown-container {
+  position: relative;
+}
+
+/* 드롭다운 메뉴 (1. 드롭다운 위치 재설정 & 2. 계층 설정 & 3. 화면 밖 이탈 방지) */
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px); /* 버튼 바로 아래 8px 여백으로 배치 */
+  bottom: auto; /* bottom: 100% 또는 마이너스 top 방지 */
+  right: 0; /* 화면 우측 기준 정렬 (bottom-end / bottom-right 방향) */
+  z-index: 1000; /* 다른 UI 요소 밑으로 숨지 않도록 z-index 1000 이상으로 설정 */
+}
+
+/* 긴 텍스트 말줄임 처리 */
+.text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

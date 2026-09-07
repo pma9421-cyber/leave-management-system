@@ -1,0 +1,6 @@
+{
+  "name": "연차 및 휴가 관리 시스템",
+  "description": "관리자와 직원을 위한 역할 기반 연차 및 휴가 신청, 승인, 잔여일수 및 월별 통계 대시보드 웹 애플리케이션",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
