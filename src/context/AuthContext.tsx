@@ -82,7 +82,7 @@ interface AuthContextType {
     status?: AccountStatus;
     password?: string;
   }) => { success: boolean; error?: string };
-  deleteUser: (userId: string) => { success: boolean; error?: string };
+  deleteUser: (userId: string) => Promise<{ success: boolean; error?: string }>;
   toggleUserStatus: (userId: string, status: AccountStatus) => { success: boolean; error?: string };
   updateEmployee: (
     userId: string,
@@ -1865,11 +1865,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  const deleteUser = (userId: string) => {
+  const deleteUser = async (userId: string): Promise<{ success: boolean; error?: string }> => {
     const target = users.find((u) => u.id === userId);
     if (!target) return { success: false, error: '삭제할 계정을 찾을 수 없습니다.' };
     if (target.id === currentUser?.id) {
       return { success: false, error: '현재 로그인 중인 본인 계정은 삭제할 수 없습니다.' };
+    }
+
+    // Important: removing only the React users array does NOT delete the Supabase
+    // Auth identity.  The RPC removes auth.users first; profiles is then removed by
+    // the existing ON DELETE CASCADE foreign key. This makes the same email truly
+    // reusable for a fresh signup/password.
+    const { error } = await supabase.rpc('delete_user_account', { p_user_id: userId });
+    if (error) {
+      console.error('Supabase account delete failed', error);
+      return {
+        success: false,
+        error: error.message || 'Supabase 인증 계정 삭제에 실패했습니다.',
+      };
     }
 
     auditLog?.addAuditLog({
@@ -1886,7 +1899,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       operatorRole: currentUser?.role || 'SUPER_ADMIN',
       ipAddress: '192.168.1.12',
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `관리자가 ${target.name} (${target.email}, 권한: ${target.role}) 계정을 데이터베이스에서 안전하게 삭제/정리하였습니다.`,
+      details: `관리자가 ${target.name} (${target.email}, 권한: ${target.role}) 계정을 Supabase Auth와 프로필에서 영구 삭제하였습니다.`,
       diff: {
         fields: [
           { label: '계정 상태', key: 'status', before: target.status, after: 'DELETED (영구 삭제)' },
@@ -1895,7 +1908,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       },
     });
 
-    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    try {
+      await refreshUsersFromSupabase();
+    } catch (refreshError) {
+      console.error('User list refresh after delete failed', refreshError);
+      setUsers((prev) => prev.filter((u) => u.id !== userId));
+    }
     return { success: true };
   };
 
