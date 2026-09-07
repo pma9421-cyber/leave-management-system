@@ -54,7 +54,7 @@ export const QuotaManagementModal: React.FC<QuotaManagementModalProps> = ({
   const usedDays = currentQuota.usedLeaveDays ?? 0;
   const remainingDays = Number((calculatedTotal - usedDays).toFixed(1));
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
@@ -72,8 +72,12 @@ export const QuotaManagementModal: React.FC<QuotaManagementModalProps> = ({
       return;
     }
 
-    updateUserLeaveBreakdown(user.id, statutory, carriedOver, compensatory, targetYear);
-    setSuccessMsg(`${targetYear}년도 연차 구성(법정/이월/보상)이 성공적으로 저장되었습니다.`);
+    const result = await updateUserLeaveBreakdown(user.id, statutory, carriedOver, compensatory, targetYear);
+    if (!result.success) {
+      setErrorMsg(result.error || '연차 정보를 저장하지 못했습니다.');
+      return;
+    }
+    setSuccessMsg(`${targetYear}년도 연차 구성(법정/이월/보상)이 중앙 DB에 저장되었습니다.`);
     setTimeout(() => {
       onClose();
     }, 1200);
