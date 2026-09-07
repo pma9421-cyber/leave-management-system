@@ -15,12 +15,12 @@ export const PasswordChangeModal: React.FC<PasswordChangeModalProps> = ({ isOpen
 
   if (!isOpen || !currentUser) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (!newPassword || newPassword.length < 4) {
-      setError('새 비밀번호는 최소 4자리 이상으로 입력해 주세요.');
+    if (!newPassword || newPassword.length < 6) {
+      setError('새 비밀번호는 최소 6자리 이상으로 입력해 주세요.');
       return;
     }
 
@@ -30,7 +30,7 @@ export const PasswordChangeModal: React.FC<PasswordChangeModalProps> = ({ isOpen
     }
 
     setLoading(true);
-    const res = completePasswordChange(currentUser.id, newPassword);
+    const res = await completePasswordChange(currentUser.id, newPassword);
     setLoading(false);
 
     if (!res.success) {
@@ -69,10 +69,10 @@ export const PasswordChangeModal: React.FC<PasswordChangeModalProps> = ({ isOpen
                 type="password"
                 id="input-new-password"
                 required
-                minLength={4}
+                minLength={6}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="최소 4자리 이상 입력"
+                placeholder="최소 6자리 이상 입력"
                 className="w-full px-3 py-2 pl-9 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600"
               />
               <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
@@ -88,7 +88,7 @@ export const PasswordChangeModal: React.FC<PasswordChangeModalProps> = ({ isOpen
                 type="password"
                 id="input-confirm-password"
                 required
-                minLength={4}
+                minLength={6}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="동일하게 한 번 더 입력"
