@@ -68,8 +68,8 @@ interface AuthContextType {
   resetYearTransition: () => void;
   updateUserPosition: (userId: string, newPosition: string) => void;
   updateUserRole: (userId: string, newRole: UserRole) => { success: boolean; error?: string };
-  approveUser: (userId: string) => { success: boolean; message?: string };
-  rejectUser: (userId: string) => { success: boolean; message?: string };
+  approveUser: (userId: string) => Promise<{ success: boolean; message?: string }>;
+  rejectUser: (userId: string) => Promise<{ success: boolean; message?: string }>;
   createUser: (data: {
     email: string;
     name: string;
@@ -1974,13 +1974,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  const approveUser = (userId: string) => {
+  const approveUser = async (userId: string): Promise<{ success: boolean; message?: string }> => {
     const target = users.find((u) => u.id === userId);
     if (!target) return { success: false, message: '사용자를 찾을 수 없습니다.' };
 
-    setUsers((prev) =>
-      prev.map((u) => (u.id === userId ? { ...u, status: 'APPROVED' } : u))
-    );
+    const { error } = await supabase.rpc('set_profile_status', {
+      p_user_id: userId,
+      p_status: 'APPROVED',
+    });
+    if (error) {
+      console.error('Supabase user approval failed', error);
+      return { success: false, message: error.message || '가입 승인 처리에 실패했습니다.' };
+    }
+
+    await refreshUsersFromSupabase();
 
     auditLog?.addAuditLog({
       actionType: 'STATUS_CHANGE',
@@ -1993,27 +2000,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       userRole: target.role,
       operatorId: currentUser?.id || 'admin',
       operatorName: currentUser ? `${currentUser.name} (${currentUser.position || '관리자'})` : '관리자',
-      operatorRole: 'ADMIN',
+      operatorRole: currentUser?.role || 'ADMIN',
       ipAddress: '192.168.1.12',
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
       details: `${target.name} 직원의 가입 신청을 검토 후 최종 승인 처리했습니다.`,
-      diff: {
-        fields: [
-          { label: '계정 상태', key: 'status', before: 'PENDING (대기)', after: 'APPROVED (승인)' },
-        ],
-      },
+      diff: { fields: [{ label: '계정 상태', key: 'status', before: 'PENDING (대기)', after: 'APPROVED (승인)' }] },
     });
 
     return { success: true, message: `${target.name} 직원의 가입이 승인되었습니다.` };
   };
 
-  const rejectUser = (userId: string) => {
+  const rejectUser = async (userId: string): Promise<{ success: boolean; message?: string }> => {
     const target = users.find((u) => u.id === userId);
     if (!target) return { success: false, message: '사용자를 찾을 수 없습니다.' };
 
-    setUsers((prev) =>
-      prev.map((u) => (u.id === userId ? { ...u, status: 'REJECTED' } : u))
-    );
+    const { error } = await supabase.rpc('set_profile_status', {
+      p_user_id: userId,
+      p_status: 'REJECTED',
+    });
+    if (error) {
+      console.error('Supabase user rejection failed', error);
+      return { success: false, message: error.message || '가입 반려 처리에 실패했습니다.' };
+    }
+
+    await refreshUsersFromSupabase();
 
     auditLog?.addAuditLog({
       actionType: 'STATUS_CHANGE',
@@ -2026,15 +2036,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       userRole: target.role,
       operatorId: currentUser?.id || 'admin',
       operatorName: currentUser ? `${currentUser.name} (${currentUser.position || '관리자'})` : '관리자',
-      operatorRole: 'ADMIN',
+      operatorRole: currentUser?.role || 'ADMIN',
       ipAddress: '192.168.1.12',
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
       details: `${target.name} 직원의 가입 신청을 반려 처리하였습니다.`,
-      diff: {
-        fields: [
-          { label: '계정 상태', key: 'status', before: 'PENDING (대기)', after: 'REJECTED (반려)' },
-        ],
-      },
+      diff: { fields: [{ label: '계정 상태', key: 'status', before: 'PENDING (대기)', after: 'REJECTED (반려)' }] },
     });
 
     return { success: true, message: `${target.name} 직원의 가입이 반려되었습니다.` };
