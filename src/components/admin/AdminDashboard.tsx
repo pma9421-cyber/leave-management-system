@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useLeave } from '../../context/LeaveContext.tsx';
 import { User } from '../../types.ts';
+import { calculateLeaveDeduction } from '../../utils/leaveUtils.ts';
 import { MonthlyLeaveChart } from '../charts/MonthlyLeaveChart.tsx';
 import { QuotaManagementModal } from './QuotaManagementModal.tsx';
 import { LeaveTypeSettingsModal } from './LeaveTypeSettingsModal.tsx';
@@ -66,7 +67,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         r.startDate &&
         r.startDate.startsWith(String(workYear))
     );
-    const leaveDaysUsedInYear = yearApprovedRequests.reduce((sum, r) => sum + r.requestedDays, 0);
+    const leaveDaysUsedInYear = yearApprovedRequests.reduce((sum, r) => {
+      const leaveType = leaveTypes.find((t) => t.id === r.leaveTypeId);
+      return sum + calculateLeaveDeduction(leaveType, r.requestedDays);
+    }, 0);
     const used =
       typeof q.usedLeaveDays === 'number' && q.usedLeaveDays > 0 ? q.usedLeaveDays : leaveDaysUsedInYear;
     return acc + used;
@@ -298,7 +302,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       r.startDate &&
                       r.startDate.startsWith(String(workYear))
                   );
-                  const calculatedUsedDays = yearApprovedRequests.reduce((sum, r) => sum + r.requestedDays, 0);
+                  const calculatedUsedDays = yearApprovedRequests.reduce((sum, r) => {
+                    const leaveType = leaveTypes.find((t) => t.id === r.leaveTypeId);
+                    return sum + calculateLeaveDeduction(leaveType, r.requestedDays);
+                  }, 0);
                   const usedDays =
                     typeof quota.usedLeaveDays === 'number' && quota.usedLeaveDays > 0
                       ? quota.usedLeaveDays
