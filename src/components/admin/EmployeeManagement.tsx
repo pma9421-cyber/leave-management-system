@@ -64,18 +64,22 @@ export const EmployeeManagement: React.FC = () => {
     );
   });
 
-  const handleApprove = (userId: string, name: string) => {
-    const res = approveUser(userId);
+  const handleApprove = async (userId: string, name: string) => {
+    const res = await approveUser(userId);
     if (res.success) {
       showToast(`${name} 직원의 계정이 승인되었습니다. 이제 해당 직원이 로그인할 수 있습니다.`);
+    } else {
+      showToast(res.message || '가입 승인 처리에 실패했습니다.');
     }
   };
 
-  const handleReject = (userId: string, name: string) => {
+  const handleReject = async (userId: string, name: string) => {
     if (window.confirm(`${name} 직원의 가입 신청을 반려하시겠습니까?`)) {
-      const res = rejectUser(userId);
+      const res = await rejectUser(userId);
       if (res.success) {
         showToast(`${name} 직원의 가입 신청이 반려되었습니다.`);
+      } else {
+        showToast(res.message || '가입 반려 처리에 실패했습니다.');
       }
     }
   };
