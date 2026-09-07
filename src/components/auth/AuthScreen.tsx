@@ -45,7 +45,7 @@ export const AuthScreen: React.FC = () => {
   const [regError, setRegError] = useState('');
   const [regSuccessMsg, setRegSuccessMsg] = useState('');
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
     setPendingNotice('');
@@ -63,13 +63,13 @@ export const AuthScreen: React.FC = () => {
       return;
     }
 
-    const res = login(loginEmail, loginPassword, loginBizNum);
+    const res = await login(loginEmail, loginPassword, loginBizNum);
     if (!res.success) {
       setLoginError(res.error || '로그인에 실패했습니다.');
     }
   };
 
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegError('');
     setRegSuccessMsg('');
@@ -86,12 +86,12 @@ export const AuthScreen: React.FC = () => {
       setRegError('모든 필수 항목을 입력해 주세요.');
       return;
     }
-    if (regPassword.trim().length < 4) {
-      setRegError('비밀번호는 최소 4자리 이상으로 입력해 주세요.');
+    if (regPassword.trim().length < 6) {
+      setRegError('비밀번호는 최소 6자리 이상으로 입력해 주세요.');
       return;
     }
 
-    const res = register({
+    const res = await register({
       name: regName.trim(),
       email: regEmail.trim(),
       businessNumber: regBizNum.trim(),
@@ -107,14 +107,14 @@ export const AuthScreen: React.FC = () => {
     } else {
       if (res.isPending) {
         setRegSuccessMsg(
-          '직원 계정 가입 신청이 완료되었습니다! 회사 관리자가 [직원관리] 탭에서 승인한 후 로그인하실 수 있습니다.'
+          '가입 신청이 완료되었습니다. 입력한 이메일로 전송된 인증 메일의 링크를 먼저 클릭해 주세요. 이메일 인증 후 회사 관리자 승인까지 완료되면 로그인할 수 있습니다.'
         );
         setIsLoginMode(true);
         setLoginEmail(regEmail.trim());
         setLoginBizNum(regBizNum.trim());
         setLoginPassword('');
       } else {
-        setRegSuccessMsg('관리자 계정이 성공적으로 생성되었습니다!');
+        setRegSuccessMsg('관리자 가입 신청이 완료되었습니다. 이메일 인증 후 최고관리자 승인을 기다려 주세요.');
       }
     }
   };
