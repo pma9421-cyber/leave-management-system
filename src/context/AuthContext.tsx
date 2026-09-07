@@ -274,6 +274,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const hydrate = async () => {
       try {
+        // A password-recovery link creates a temporary Supabase session.
+        // Do not treat that recovery session as a normal application login.
+        const isPasswordRecovery =
+          typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).get('password-reset') === '1';
+        if (isPasswordRecovery) {
+          if (alive) {
+            setCurrentUserId(null);
+            setUsers([]);
+          }
+          return;
+        }
+
         const { data } = await supabase.auth.getSession();
         const authUser = data.session?.user;
         if (!authUser || !alive) return;
@@ -292,9 +305,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     void hydrate();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       window.setTimeout(async () => {
         try {
+          // PASSWORD_RECOVERY is an authenticated recovery session only for changing
+          // the password. It must never unlock the main application UI.
+          if (event === 'PASSWORD_RECOVERY') {
+            if (alive) {
+              setCurrentUserId(null);
+              setUsers([]);
+            }
+            return;
+          }
+
+          const isPasswordRecovery =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('password-reset') === '1';
+          if (isPasswordRecovery) {
+            if (alive) {
+              setCurrentUserId(null);
+              setUsers([]);
+            }
+            return;
+          }
+
           const authUser = session?.user;
           if (!authUser || !alive) {
             if (alive) {
