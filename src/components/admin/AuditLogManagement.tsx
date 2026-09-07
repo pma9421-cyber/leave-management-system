@@ -3,7 +3,6 @@ import { useAuditLog } from '../../context/AuditLogContext.tsx';
 import { useAuth, normalizeBizNum, formatBizNum } from '../../context/AuthContext.tsx';
 import { AuditLog, AuditLogActionType, User, UserRole, AccountStatus, PasswordResetRequest } from '../../types.ts';
 import { AuditLogDetailModal } from './AuditLogDetailModal.tsx';
-import { UserHistoryModal } from './UserHistoryModal.tsx';
 import { EditEmployeeModal } from './EditEmployeeModal.tsx';
 import { CreateUserModal } from './CreateUserModal.tsx';
 import { IssueTempPasswordModal } from './IssueTempPasswordModal.tsx';
@@ -88,8 +87,6 @@ export const AuditLogManagement: React.FC = () => {
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [userBizFilter, setUserBizFilter] = useState<string>('ALL');
   const [userRoleFilter, setUserRoleFilter] = useState<string>('ALL');
-  const [historyTargetUser, setHistoryTargetUser] = useState<User | null>(null);
-  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [editTargetUser, setEditTargetUser] = useState<User | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -747,20 +744,7 @@ export const AuditLogManagement: React.FC = () => {
                           </td>
                           <td className="py-3 px-4 whitespace-nowrap text-center">
                             <div className="flex items-center justify-center gap-1">
-                              {/* 1. Account History Button */}
-                              <button
-                                onClick={() => {
-                                  setHistoryTargetUser(u);
-                                  setIsHistoryModalOpen(true);
-                                }}
-                                className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-                                title="이 계정의 감사 이력 조회"
-                              >
-                                <History className="w-3 h-3 text-blue-600" />
-                                <span>이력 조회</span>
-                              </button>
-
-                              {/* 2. Edit User Button */}
+                              {/* Edit User Button */}
                               <button
                                 onClick={() => {
                                   setEditTargetUser(u);
@@ -773,7 +757,7 @@ export const AuditLogManagement: React.FC = () => {
                                 <span>수정</span>
                               </button>
 
-                              {/* 3. Status Toggle (Active / Inactive) */}
+                              {/* Status Toggle (Active / Inactive) */}
                               {!isSuper && (
                                 <button
                                   onClick={() => {
@@ -1134,16 +1118,6 @@ export const AuditLogManagement: React.FC = () => {
         onClose={() => {
           setIsDetailOpen(false);
           setSelectedLog(null);
-        }}
-      />
-
-      {/* User Specific History Modal */}
-      <UserHistoryModal
-        user={historyTargetUser}
-        isOpen={isHistoryModalOpen}
-        onClose={() => {
-          setIsHistoryModalOpen(false);
-          setHistoryTargetUser(null);
         }}
       />
 
