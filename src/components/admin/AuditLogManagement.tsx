@@ -1218,15 +1218,18 @@ export const AuditLogManagement: React.FC = () => {
                 id="btn-confirm-delete-user-submit"
                 type="button"
                 disabled={isDeleting}
-                onClick={() => {
+                onClick={async () => {
                   setIsDeleting(true);
-                  const res = deleteUser(userToDelete.id);
-                  setIsDeleting(false);
-                  if (res.success) {
-                    showToast(`[${userToDelete.name}] 계정이 안전하게 영구 삭제되었습니다.`);
-                    setUserToDelete(null);
-                  } else {
-                    showToast(res.error || '계정 삭제에 실패했습니다.');
+                  try {
+                    const res = await deleteUser(userToDelete.id);
+                    if (res.success) {
+                      showToast(`[${userToDelete.name}] Supabase 인증 계정까지 영구 삭제되었습니다.`);
+                      setUserToDelete(null);
+                    } else {
+                      showToast(res.error || '계정 삭제에 실패했습니다.');
+                    }
+                  } finally {
+                    setIsDeleting(false);
                   }
                 }}
                 className="px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 transition-colors shadow-xs cursor-pointer flex items-center gap-1.5"
