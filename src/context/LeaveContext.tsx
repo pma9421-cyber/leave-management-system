@@ -665,16 +665,9 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const newDeduction = calculateLeaveDeduction(newType, newDays);
       const diff = Number((newDeduction - oldDeduction).toFixed(1));
 
-      if (diff > 0) {
-        const quota = getUserQuota(targetRequest.userId, reqYear);
-        const remaining = Number((quota.totalLeaveDays - quota.usedLeaveDays).toFixed(1));
-        if (diff > remaining) {
-          return {
-            success: false,
-            error: `추가 차감 일수(${diff}일)가 직원의 ${reqYear}년도 잔여 연차(${remaining}일)를 초과합니다.`,
-          };
-        }
-      }
+      // 연차 초과(가불/마이너스) 허용:
+      // 승인 완료 건을 수정하여 추가 차감이 발생해도 잔여 연차보다 큰지 검사하지 않습니다.
+      // totalLeaveDays - usedLeaveDays 값이 음수가 되면 UI에서 그대로 마이너스 잔여 연차로 표시합니다.
 
       if (diff !== 0) {
         updateUserUsedDays(targetRequest.userId, diff, reqYear);
