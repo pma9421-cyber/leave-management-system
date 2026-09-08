@@ -97,7 +97,7 @@ interface AuthContextType {
       role?: UserRole;
       status?: AccountStatus;
     }
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
 
   // Password reset feature
   passwordResetRequests: PasswordResetRequest[];
@@ -110,7 +110,7 @@ interface AuthContextType {
   businessAdminLimits: BusinessAdminLimit[];
   getBusinessAdminLimit: (businessNumber: string) => number;
   setBusinessAdminLimit: (businessNumber: string, maxLimit: number, companyName?: string) => { success: boolean; error?: string };
-  updateCompanyName: (businessNumber: string, newCompanyName: string) => { success: boolean; error?: string };
+  updateCompanyName: (businessNumber: string, newCompanyName: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -523,11 +523,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  // Update company name across the business
-  const updateCompanyName = (
+  // Update company name in Supabase. The database is the source of truth.
+  const updateCompanyName = async (
     businessNumber: string,
     newCompanyName: string
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const trimmedName = newCompanyName.trim();
     if (!trimmedName) {
       return { success: false, error: '회사명을 입력해 주세요.' };
@@ -535,83 +535,78 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const formatted = formatBizNum(businessNumber);
     const norm = normalizeBizNum(businessNumber);
-
-    if (!norm || norm.length < 5) {
+    if (norm.length !== 10) {
       return { success: false, error: '유효한 사업자등록번호가 아닙니다.' };
+    }
+    if (norm === '9999999999') {
+      return { success: false, error: '마스터 최고관리자(admin) 회사명은 변경할 수 없습니다.' };
     }
 
     const prevCompanyName =
-      businessAdminLimits.find((b) => normalizeBizNum(b.businessNumber) === norm)?.companyName ||
       users.find((u) => normalizeBizNum(u.businessNumber) === norm)?.companyName ||
+      businessAdminLimits.find((b) => normalizeBizNum(b.businessNumber) === norm)?.companyName ||
       '회사';
 
-    // 1. Update all users belonging to this businessNumber (super admin is always fixed to admin)
-    setUsers((prev) =>
-      prev.map((u) => {
-        if (u.role === 'SUPER_ADMIN' || u.email === 'admin@segyotax.com') {
-          return { ...u, companyName: 'admin' };
+    try {
+      const { data: company, error: findError } = await supabase
+        .from('companies')
+        .select('id,business_number,company_name')
+        .eq('business_number', norm)
+        .maybeSingle();
+      if (findError) throw findError;
+      if (!company) throw new Error('해당 사업장 정보를 찾을 수 없습니다.');
+
+      const { error: updateError } = await supabase
+        .from('companies')
+        .update({ company_name: trimmedName })
+        .eq('id', company.id);
+      if (updateError) throw updateError;
+
+      // Re-read from DB so logout/login and other PCs see exactly the same value.
+      await refreshUsersFromSupabase();
+
+      setBusinessAdminLimits((prev) => {
+        const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        const exists = prev.some((b) => normalizeBizNum(b.businessNumber) === norm);
+        if (exists) {
+          return prev.map((b) =>
+            normalizeBizNum(b.businessNumber) === norm
+              ? { ...b, companyName: trimmedName, updatedAt: now, updatedBy: currentUser?.name || '관리자' }
+              : b
+          );
         }
-        if (normalizeBizNum(u.businessNumber) === norm) {
-          return { ...u, companyName: trimmedName };
-        }
-        return u;
-      })
-    );
+        return [...prev, {
+          businessNumber: formatted,
+          companyName: trimmedName,
+          maxAdminCount: 1,
+          updatedAt: now,
+          updatedBy: currentUser?.name || '관리자',
+        }];
+      });
 
-    // 2. Update businessAdminLimits
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
-    setBusinessAdminLimits((prev) => {
-      const exists = prev.some((b) => normalizeBizNum(b.businessNumber) === norm);
-      if (exists) {
-        return prev.map((b) =>
-          normalizeBizNum(b.businessNumber) === norm
-            ? {
-                ...b,
-                companyName: trimmedName,
-                updatedAt: now,
-                updatedBy: currentUser?.name || 'admin',
-              }
-            : b
-        );
-      } else {
-        return [
-          ...prev,
-          {
-            businessNumber: formatted,
-            companyName: trimmedName,
-            maxAdminCount: 1,
-            updatedAt: now,
-            updatedBy: currentUser?.name || 'admin',
-          },
-        ];
-      }
-    });
+      auditLog?.addAuditLog({
+        actionType: 'PROFILE_UPDATE',
+        actionTitle: '사업장 회사명(상호) 변경',
+        userId: currentUser?.id || 'admin',
+        userName: currentUser?.name || '관리자',
+        userEmail: currentUser?.email || 'admin@segyotax.com',
+        userDepartment: currentUser?.department || '경영지원본부',
+        userPosition: currentUser?.position || '대표',
+        userRole: currentUser?.role || 'ADMIN',
+        operatorId: currentUser?.id || 'admin',
+        operatorName: currentUser ? `${currentUser.name} (${currentUser.position || '관리자'})` : '관리자',
+        operatorRole: currentUser?.role || 'ADMIN',
+        ipAddress: '192.168.1.1',
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
+        details: `사업장(사업자등록번호: ${formatted}) 회사명을 '${prevCompanyName}'에서 '${trimmedName}'(으)로 변경하였습니다.`,
+        diff: { fields: [{ label: '회사명 (상호)', key: 'companyName', before: prevCompanyName, after: trimmedName }] },
+      });
 
-    // 3. Record in Audit Log
-    auditLog?.addAuditLog({
-      actionType: 'PROFILE_UPDATE',
-      actionTitle: '사업장 회사명(상호) 변경',
-      userId: currentUser?.id || 'admin',
-      userName: currentUser?.name || '관리자',
-      userEmail: currentUser?.email || 'admin@segyotax.com',
-      userDepartment: currentUser?.department || '경영지원본부',
-      userPosition: currentUser?.position || '대표',
-      userRole: currentUser?.role || 'ADMIN',
-      operatorId: currentUser?.id || 'admin',
-      operatorName: currentUser ? `${currentUser.name} (${currentUser.position || '관리자'})` : '관리자',
-      operatorRole: currentUser?.role || 'ADMIN',
-      ipAddress: '192.168.1.1',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `사업장(사업자등록번호: ${formatted}) 회사명을 '${prevCompanyName}'에서 '${trimmedName}'(으)로 변경하였습니다.`,
-      diff: {
-        fields: [
-          { label: '사업자등록번호', key: 'businessNumber', before: formatted, after: formatted },
-          { label: '회사명 (상호)', key: 'companyName', before: prevCompanyName, after: trimmedName },
-        ],
-      },
-    });
-
-    return { success: true };
+      return { success: true };
+    } catch (e: any) {
+      console.error('회사명 DB 저장 실패', e);
+      return { success: false, error: e?.message || '회사명 저장에 실패했습니다.' };
+    }
   };
 
   // 1. Password reset request: unauthenticated user -> administrator queue in Supabase.
@@ -1895,7 +1890,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true, message: `${target.name} 직원의 가입이 반려되었습니다.` };
   };
 
-  const updateEmployee = (
+  const updateEmployee = async (
     userId: string,
     data: {
       position?: string;
@@ -1909,103 +1904,88 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       role?: UserRole;
       status?: AccountStatus;
     }
-  ) => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const target = users.find((u) => u.id === userId);
     if (!target) return { success: false, error: '계정을 찾을 수 없습니다.' };
 
-    // If changing role to ADMIN, check max admin limit
-    if (data.role && data.role === 'ADMIN' && target.role !== 'ADMIN') {
-      const targetBiz = data.businessNumber || target.businessNumber;
-      const bizDigits = normalizeBizNum(targetBiz);
-      const currentAdminCount = users.filter(
-        (u) => normalizeBizNum(u.businessNumber) === bizDigits && u.role === 'ADMIN' && u.id !== userId
-      ).length;
-      const maxAllowed = getBusinessAdminLimit(targetBiz);
+    const nextName = data.name !== undefined ? data.name.trim() : target.name;
+    const nextDepartment = data.department !== undefined ? data.department.trim() : (target.department || '');
+    const nextPosition = data.position !== undefined ? data.position.trim() : target.position;
+    const nextJoinedDate = data.joinedDate !== undefined ? data.joinedDate : target.joinedDate;
 
-      if (currentAdminCount >= maxAllowed) {
-        return {
-          success: false,
-          error: `해당 사업장(사업자번호: ${formatBizNum(targetBiz)})의 관리자 계정 최대 한도(${maxAllowed}개)를 초과하여 관리자 권한을 부여할 수 없습니다. 시스템 최고 관리자(admin)에게 한도 증설을 요청하세요.`,
-        };
-      }
-    }
+    if (!nextName) return { success: false, error: '성명을 입력해 주세요.' };
+    if (!nextPosition) return { success: false, error: '직급을 입력해 주세요.' };
+    if (!nextJoinedDate) return { success: false, error: '입사일자를 입력해 주세요.' };
 
     const diffFields: { label: string; key: string; before: any; after: any }[] = [];
-    if (data.name !== undefined && data.name.trim() !== target.name) {
-      diffFields.push({ label: '성명', key: 'name', before: target.name, after: data.name.trim() });
-    }
-    if (data.email !== undefined && data.email.trim() !== target.email) {
-      diffFields.push({ label: '이메일', key: 'email', before: target.email, after: data.email.trim() });
-    }
-    if (data.position !== undefined && data.position.trim() !== target.position) {
-      diffFields.push({ label: '직급', key: 'position', before: target.position, after: data.position.trim() });
-    }
-    if (data.joinedDate !== undefined && data.joinedDate !== target.joinedDate) {
-      diffFields.push({ label: '입사일자', key: 'joinedDate', before: target.joinedDate, after: data.joinedDate });
-    }
-    if (data.department !== undefined && data.department.trim() !== target.department) {
-      diffFields.push({ label: '소속 부서', key: 'department', before: target.department || '-', after: data.department.trim() });
-    }
-    if (data.totalLeaveDays !== undefined && data.totalLeaveDays !== target.totalLeaveDays) {
-      diffFields.push({ label: '총 부여 연차', key: 'totalLeaveDays', before: target.totalLeaveDays, after: data.totalLeaveDays });
-    }
-    if (data.businessNumber !== undefined && data.businessNumber !== target.businessNumber) {
-      diffFields.push({ label: '사업자등록번호', key: 'businessNumber', before: target.businessNumber, after: data.businessNumber });
-    }
-    if (data.role !== undefined && data.role !== target.role) {
-      diffFields.push({ label: '권한 등급', key: 'role', before: target.role, after: data.role });
-    }
-    if (data.status !== undefined && data.status !== target.status) {
-      diffFields.push({ label: '계정 상태', key: 'status', before: target.status, after: data.status });
+    if (nextName !== target.name) diffFields.push({ label: '성명', key: 'name', before: target.name, after: nextName });
+    if (nextPosition !== target.position) diffFields.push({ label: '직급', key: 'position', before: target.position, after: nextPosition });
+    if (nextJoinedDate !== target.joinedDate) diffFields.push({ label: '입사일자', key: 'joinedDate', before: target.joinedDate, after: nextJoinedDate });
+    if (nextDepartment !== (target.department || '')) diffFields.push({ label: '소속 부서', key: 'department', before: target.department || '-', after: nextDepartment || '-' });
+    if (data.companyName !== undefined && data.companyName.trim() && data.companyName.trim() !== target.companyName) {
+      diffFields.push({ label: '회사명 (상호)', key: 'companyName', before: target.companyName || '-', after: data.companyName.trim() });
     }
 
-    setUsers((prev) =>
-      prev.map((u) => {
-        if (u.id !== userId) return u;
-        return {
-          ...u,
-          name: data.name !== undefined ? data.name.trim() : u.name,
-          email: data.email !== undefined ? data.email.trim().toLowerCase() : u.email,
-          position: data.position !== undefined ? data.position.trim() : u.position,
-          joinedDate: data.joinedDate !== undefined ? data.joinedDate : u.joinedDate,
-          department: data.department !== undefined ? data.department.trim() : u.department,
-          totalLeaveDays: data.totalLeaveDays !== undefined ? data.totalLeaveDays : u.totalLeaveDays,
-          businessNumber: data.businessNumber !== undefined ? formatBizNum(data.businessNumber) : u.businessNumber,
-          companyName:
-            u.role === 'SUPER_ADMIN' || u.email === 'admin@segyotax.com'
-              ? 'admin'
-              : data.companyName !== undefined
-              ? data.companyName.trim()
-              : u.companyName,
-          role: data.role !== undefined ? data.role : u.role,
-          status: data.status !== undefined ? data.status : u.status,
-        };
-      })
-    );
-
-    if (diffFields.length > 0) {
-      auditLog?.addAuditLog({
-        actionType: 'PROFILE_UPDATE',
-        actionTitle: '계정 및 인사정보 수정',
-        userId: target.id,
-        userName: data.name !== undefined ? data.name.trim() : target.name,
-        userEmail: data.email !== undefined ? data.email.trim() : target.email,
-        userDepartment: data.department !== undefined ? data.department.trim() : target.department,
-        userPosition: data.position !== undefined ? data.position.trim() : target.position,
-        userRole: data.role !== undefined ? data.role : target.role,
-        operatorId: currentUser?.id || 'admin',
-        operatorName: currentUser ? `${currentUser.name} (${currentUser.position || '관리자'})` : '관리자',
-        operatorRole: currentUser?.role || 'SUPER_ADMIN',
-        ipAddress: '192.168.1.12',
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-        details: `${target.name} 계정 정보가 수정되었습니다. (${diffFields.map((f) => f.label).join(', ')})`,
-        diff: {
-          fields: diffFields,
-        },
+    try {
+      // SECURITY DEFINER RPC: only a same-company administrator can edit employee HR fields.
+      const { error: profileError } = await supabase.rpc('admin_update_profile', {
+        p_user_id: userId,
+        p_name: nextName,
+        p_department: nextDepartment || null,
+        p_position: nextPosition,
+        p_joined_date: nextJoinedDate,
       });
-    }
+      if (profileError) throw profileError;
 
-    return { success: true };
+      // Company name belongs to companies, not profiles. Update it separately for the whole workplace.
+      if (
+        data.companyName !== undefined &&
+        data.companyName.trim() &&
+        data.companyName.trim() !== target.companyName &&
+        target.role !== 'SUPER_ADMIN'
+      ) {
+        const norm = normalizeBizNum(target.businessNumber);
+        const { data: company, error: companyFindError } = await supabase
+          .from('companies')
+          .select('id')
+          .eq('business_number', norm)
+          .maybeSingle();
+        if (companyFindError) throw companyFindError;
+        if (!company) throw new Error('사업장 정보를 찾을 수 없습니다.');
+        const { error: companyUpdateError } = await supabase
+          .from('companies')
+          .update({ company_name: data.companyName.trim() })
+          .eq('id', company.id);
+        if (companyUpdateError) throw companyUpdateError;
+      }
+
+      await refreshUsersFromSupabase();
+
+      if (diffFields.length > 0) {
+        auditLog?.addAuditLog({
+          actionType: 'PROFILE_UPDATE',
+          actionTitle: '계정 및 인사정보 수정',
+          userId: target.id,
+          userName: nextName,
+          userEmail: target.email,
+          userDepartment: nextDepartment,
+          userPosition: nextPosition,
+          userRole: target.role,
+          operatorId: currentUser?.id || 'admin',
+          operatorName: currentUser ? `${currentUser.name} (${currentUser.position || '관리자'})` : '관리자',
+          operatorRole: currentUser?.role || 'SUPER_ADMIN',
+          ipAddress: '192.168.1.12',
+          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
+          details: `${target.name} 계정 정보가 DB에 수정되었습니다. (${diffFields.map((f) => f.label).join(', ')})`,
+          diff: { fields: diffFields },
+        });
+      }
+
+      return { success: true };
+    } catch (e: any) {
+      console.error('직원 정보 DB 저장 실패', e);
+      return { success: false, error: e?.message || '직원 정보 저장에 실패했습니다.' };
+    }
   };
 
   return (
