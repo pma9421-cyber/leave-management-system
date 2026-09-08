@@ -37,9 +37,9 @@ export const LeaveTypeSettingsModal: React.FC<LeaveTypeSettingsModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!typeToDelete) return;
-    const res = deleteLeaveType(typeToDelete.id);
+    const res = await deleteLeaveType(typeToDelete.id);
     if (!res.success) {
       setErrorMsg(res.error || '삭제에 실패했습니다.');
     } else {
@@ -49,7 +49,7 @@ export const LeaveTypeSettingsModal: React.FC<LeaveTypeSettingsModalProps> = ({
     setTypeToDelete(null);
   };
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
@@ -58,7 +58,7 @@ export const LeaveTypeSettingsModal: React.FC<LeaveTypeSettingsModalProps> = ({
       return;
     }
 
-    const res = addLeaveType({
+    const res = await addLeaveType({
       name: name.trim(),
       code: code.trim().toUpperCase() || `CUSTOM_${Date.now()}`,
       deductionDays: Number(deductionDays),
@@ -173,7 +173,10 @@ export const LeaveTypeSettingsModal: React.FC<LeaveTypeSettingsModalProps> = ({
 
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
-                      onClick={() => toggleLeaveTypeActive(type.id)}
+                      onClick={async () => {
+                        const res = await toggleLeaveTypeActive(type.id);
+                        if (!res.success) setErrorMsg(res.error || '상태 변경에 실패했습니다.');
+                      }}
                       className="p-1 rounded-md text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
                       title={type.isActive ? '비활성화하기' : '활성화하기'}
                     >
