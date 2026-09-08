@@ -399,36 +399,33 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const effectiveDeduction = calculateLeaveDeduction(leaveType, data.requestedDays);
 
     try {
-      const { data: inserted, error } = await supabase
-        .from('leave_requests')
-        .insert({
-          company_id: currentUser.companyId,
-          user_id: currentUser.id,
-          leave_type_id: leaveType.id,
-          start_date: data.startDate,
-          end_date: data.endDate,
-          requested_days: data.requestedDays,
-          reason: data.reason?.trim() || null,
-          status: 'PENDING',
-        })
-        .select('*')
-        .single();
+      // 직접 INSERT는 RLS 정책과 클라이언트 company_id 불일치 시 차단될 수 있으므로,
+      // 서버 SECURITY DEFINER RPC가 auth.uid() 기준으로 회사/승인상태를 검증하고 UUID를 생성합니다.
+      const { data: requestId, error } = await supabase.rpc('submit_leave_request', {
+        p_leave_type_id: leaveType.id,
+        p_start_date: data.startDate,
+        p_end_date: data.endDate,
+        p_requested_days: data.requestedDays,
+        p_reason: data.reason?.trim() || null,
+      });
       if (error) throw error;
+      if (!requestId) throw new Error('휴가 신청 ID를 생성하지 못했습니다.');
 
+      const now = new Date();
       const newRequest: LeaveRequest = {
-        id: inserted.id,
-        userId: inserted.user_id,
+        id: String(requestId),
+        userId: currentUser.id,
         userName: currentUser.name,
         userDepartment: currentUser.department,
         userPosition: currentUser.position,
-        leaveTypeId: inserted.leave_type_id,
+        leaveTypeId: leaveType.id,
         leaveTypeName: leaveType.name,
-        startDate: inserted.start_date,
-        endDate: inserted.end_date,
-        requestedDays: Number(inserted.requested_days),
-        reason: inserted.reason || '',
-        status: inserted.status,
-        appliedAt: inserted.created_at ? String(inserted.created_at).replace('T', ' ').slice(0, 19) : '',
+        startDate: data.startDate,
+        endDate: data.endDate,
+        requestedDays: Number(data.requestedDays),
+        reason: data.reason?.trim() || '',
+        status: 'PENDING',
+        appliedAt: now.toISOString().replace('T', ' ').slice(0, 19),
       };
 
       setLeaveRequests((prev) => [newRequest, ...prev.filter((r) => r.id !== newRequest.id && !r.id.startsWith('req-'))]);
