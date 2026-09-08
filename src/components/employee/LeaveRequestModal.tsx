@@ -83,7 +83,7 @@ export const LeaveRequestModal: React.FC<LeaveRequestModalProps> = ({
   const effectiveDeduction = calculateLeaveDeduction(selectedType, calculatedDays);
   const isOverQuota = effectiveDeduction > 0 && effectiveDeduction > remainingQuota;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
@@ -104,7 +104,7 @@ export const LeaveRequestModal: React.FC<LeaveRequestModalProps> = ({
 
     // 초과 사용 시 남은 연차가 마이너스로 전환됨 안내 후 진행
     setIsSubmitting(true);
-    const res = submitLeaveRequest({
+    const res = await submitLeaveRequest({
       leaveTypeId: selectedType.id,
       startDate,
       endDate: isHalfDay ? startDate : endDate,
