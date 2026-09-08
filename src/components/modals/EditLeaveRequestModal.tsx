@@ -120,15 +120,6 @@ export const EditLeaveRequestModal: React.FC<EditLeaveRequestModalProps> = ({
       return;
     }
 
-    if (isOverQuota) {
-      setErrorMsg(
-        request.status === 'APPROVED'
-          ? `추가 차감 일수(${deductionDiff}일)가 잔여 연차(${remainingQuota}일)를 초과합니다.`
-          : `잔여 연차(${remainingQuota}일)를 초과하여 신청할 수 없습니다.`
-      );
-      return;
-    }
-
     setIsSubmitting(true);
     const finalEndDate =
       selectedType.code === 'HALF_AM' || selectedType.code === 'HALF_PM' ? startDate : endDate;
@@ -181,6 +172,16 @@ export const EditLeaveRequestModal: React.FC<EditLeaveRequestModalProps> = ({
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {isOverQuota && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+              <span>
+                잔여 연차를 초과하는 수정입니다. 수정 후 잔여 연차는
+                <strong> {Number((remainingQuota - (request.status === 'APPROVED' ? Math.max(deductionDiff, 0) : newDeduction)).toFixed(1))}일</strong>로 표시됩니다.
+              </span>
             </div>
           )}
 
