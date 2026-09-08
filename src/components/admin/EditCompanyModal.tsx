@@ -37,7 +37,7 @@ export const EditCompanyModal: React.FC<EditCompanyModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
@@ -60,7 +60,7 @@ export const EditCompanyModal: React.FC<EditCompanyModalProps> = ({
     }
 
     setIsSubmitting(true);
-    const res = updateCompanyName(targetBizNum, trimmed);
+    const res = await updateCompanyName(targetBizNum, trimmed);
     setIsSubmitting(false);
 
     if (!res.success) {
