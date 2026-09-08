@@ -118,13 +118,16 @@ export const ApprovalManagement: React.FC = () => {
     setDeletingRequest(req);
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!deletingRequest) return;
-    const res = deleteLeaveRequest(deletingRequest.id);
+    const res = await deleteLeaveRequest(deletingRequest.id);
     if (res.success) {
       setSuccessMsg(`${deletingRequest.userName}님의 휴가 신청 내역이 삭제되었습니다.`);
       setTimeout(() => setSuccessMsg(''), 4000);
       setDeletingRequest(null);
+    } else {
+      setSuccessMsg(res.error || '삭제에 실패했습니다.');
+      setTimeout(() => setSuccessMsg(''), 4000);
     }
   };
 
