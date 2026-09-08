@@ -55,7 +55,7 @@ export const EditEmployeeModal: React.FC<EditEmployeeModalProps> = ({
   const isMasterAdmin = currentUser?.role === 'SUPER_ADMIN';
   const isTargetSuperAdmin = user.role === 'SUPER_ADMIN' || user.email === 'admin@segyotax.com';
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
@@ -70,7 +70,7 @@ export const EditEmployeeModal: React.FC<EditEmployeeModalProps> = ({
 
     setIsSubmitting(true);
 
-    const res = updateEmployee(user.id, {
+    const res = await updateEmployee(user.id, {
       position: position.trim(),
       department: department.trim(),
       companyName: companyName.trim(),
