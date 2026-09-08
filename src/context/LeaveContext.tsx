@@ -10,9 +10,9 @@ interface LeaveContextType {
   leaveTypes: LeaveType[];
   leaveRequests: LeaveRequest[];
   quotaAdjustments: QuotaAdjustmentLog[];
-  addLeaveType: (newType: Omit<LeaveType, 'id'>) => { success: boolean; error?: string };
-  deleteLeaveType: (typeId: string) => { success: boolean; error?: string };
-  toggleLeaveTypeActive: (typeId: string) => void;
+  addLeaveType: (newType: Omit<LeaveType, 'id'>) => Promise<{ success: boolean; error?: string }>;
+  deleteLeaveType: (typeId: string) => Promise<{ success: boolean; error?: string }>;
+  toggleLeaveTypeActive: (typeId: string) => Promise<{ success: boolean; error?: string }>;
   submitLeaveRequest: (data: {
     leaveTypeId: string;
     startDate: string;
@@ -39,7 +39,7 @@ interface LeaveContextType {
       requestedDays?: number;
     }
   ) => { success: boolean; error?: string };
-  deleteLeaveRequest: (requestId: string) => { success: boolean; error?: string };
+  deleteLeaveRequest: (requestId: string) => Promise<{ success: boolean; error?: string }>;
   approveLeaveRequest: (requestId: string, comment?: string) => { success: boolean; error?: string };
   rejectLeaveRequest: (requestId: string, rejectionReason?: string) => { success: boolean; error?: string };
   cancelLeaveRequest: (requestId: string) => { success: boolean; error?: string };
@@ -139,26 +139,19 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [quotaAdjustments]);
 
 
-  // Supabase에 저장된 관리자 대리 휴가신청을 다시 불러옵니다.
-  // 기존 브라우저 localStorage 데이터와 병합하므로 과거 로컬 데이터도 즉시 사라지지 않습니다.
+  // Supabase 중앙 DB에서 휴가유형/휴가신청을 다시 불러옵니다.
+  // DB에 존재하는 항목은 DB를 기준으로 하며, 과거 로컬 전용 데이터는 함께 유지합니다.
   useEffect(() => {
     if (!currentUser) return;
     let cancelled = false;
 
-    const hydrateProxyRequests = async () => {
+    const hydrateCentralLeaveData = async () => {
       try {
-        const { data: rows, error } = await supabase
-          .from('leave_requests')
+        const { data: typeRows, error: typeError } = await supabase
+          .from('leave_types')
           .select('*')
-          .eq('is_proxy', true)
-          .order('created_at', { ascending: false });
-        if (error) throw error;
-        if (cancelled) return;
-
-        const typeIds = [...new Set((rows || []).map((r: any) => r.leave_type_id).filter(Boolean))];
-        const { data: typeRows, error: typeError } = typeIds.length
-          ? await supabase.from('leave_types').select('*').in('id', typeIds)
-          : ({ data: [], error: null } as any);
+          .eq('is_deleted', false)
+          .order('created_at', { ascending: true });
         if (typeError) throw typeError;
         if (cancelled) return;
 
@@ -179,14 +172,20 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return mapped;
         });
 
-        setLeaveTypes((prev) => {
-          const ids = new Set(prev.map((t) => t.id));
-          return [...prev, ...dbTypes.filter((t) => !ids.has(t.id))];
-        });
+        // DB 휴가유형이 있으면 DB를 단일 기준으로 사용합니다.
+        // 이렇게 해야 삭제한 유형이 localStorage 때문에 다시 나타나지 않습니다.
+        if (dbTypes.length > 0) setLeaveTypes(dbTypes);
+
+        const { data: rows, error } = await supabase
+          .from('leave_requests')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        if (cancelled) return;
 
         const mappedRequests: LeaveRequest[] = (rows || []).map((r: any) => {
           const u = users.find((user) => user.id === r.user_id);
-          const t = typeMap.get(r.leave_type_id);
+          const t = typeMap.get(r.leave_type_id) || dbTypes.find((x) => x.id === r.leave_type_id);
           return {
             id: r.id,
             userId: r.user_id,
@@ -209,59 +208,87 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         setLeaveRequests((prev) => {
           const dbIds = new Set(mappedRequests.map((r) => r.id));
-          return [...mappedRequests, ...prev.filter((r) => !dbIds.has(r.id))];
+          const localOnly = prev.filter((r) => !dbIds.has(r.id) && !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(r.id));
+          return [...mappedRequests, ...localOnly];
         });
       } catch (e) {
-        console.error('Failed to hydrate proxy leave requests from Supabase', e);
+        console.error('Failed to hydrate leave data from Supabase', e);
       }
     };
 
-    void hydrateProxyRequests();
+    void hydrateCentralLeaveData();
     return () => {
       cancelled = true;
     };
   }, [currentUser?.id, users.length]);
 
-  // Add extensible custom leave type
-  const addLeaveType = (newType: Omit<LeaveType, 'id'>) => {
+  // 휴가 유형 추가 - Supabase 중앙 DB에 영구 저장
+  const addLeaveType = async (newType: Omit<LeaveType, 'id'>) => {
     const trimmedName = newType.name.trim();
-    if (!trimmedName) {
-      return { success: false, error: '휴가 유형명을 입력해 주세요.' };
-    }
+    if (!trimmedName) return { success: false, error: '휴가 유형명을 입력해 주세요.' };
     if (leaveTypes.some((t) => t.name.toLowerCase() === trimmedName.toLowerCase())) {
       return { success: false, error: '이미 동일한 이름의 휴가 유형이 존재합니다.' };
     }
 
-    const created: LeaveType = {
-      ...newType,
-      id: `type-${Date.now()}`,
-      name: trimmedName,
-      code: newType.code.trim().toUpperCase() || `CUSTOM_${Date.now()}`,
-      isActive: true,
-      isCustom: true,
-    };
-
-    setLeaveTypes((prev) => [...prev, created]);
-    return { success: true };
+    try {
+      const { data, error } = await supabase.rpc('create_leave_type', {
+        p_name: trimmedName,
+        p_code: newType.code.trim().toUpperCase() || `CUSTOM_${Date.now()}`,
+        p_deduction_days: Number(newType.deductionDays || 0),
+        p_is_paid: Boolean(newType.isPaid),
+        p_description: newType.description || '',
+        p_color: newType.color || '#3b82f6',
+      });
+      if (error) throw error;
+      const row: any = Array.isArray(data) ? data[0] : data;
+      if (row?.id) {
+        setLeaveTypes((prev) => [...prev, {
+          id: row.id,
+          name: row.name,
+          code: row.code,
+          deductionDays: Number(row.deduction_days || 0),
+          isPaid: Boolean(row.is_paid),
+          description: row.description || '',
+          color: row.color || '#3b82f6',
+          isActive: Boolean(row.is_active),
+          isCustom: Boolean(row.is_custom),
+        }]);
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message || '휴가 유형을 DB에 저장하지 못했습니다.' };
+    }
   };
 
-  const deleteLeaveType = (typeId: string) => {
-    if (leaveTypes.length <= 1) {
-      return { success: false, error: '최소 1개 이상의 휴가 종류가 유지되어야 합니다.' };
-    }
+  // 휴가 유형 삭제 - 실제 삭제 대신 DB에서 deleted 처리하여 과거 신청 FK는 보존
+  const deleteLeaveType = async (typeId: string) => {
+    if (leaveTypes.length <= 1) return { success: false, error: '최소 1개 이상의 휴가 종류가 유지되어야 합니다.' };
     const target = leaveTypes.find((t) => t.id === typeId);
-    if (!target) {
-      return { success: false, error: '삭제할 휴가 종류를 찾을 수 없습니다.' };
+    if (!target) return { success: false, error: '삭제할 휴가 종류를 찾을 수 없습니다.' };
+    try {
+      const { error } = await supabase.rpc('delete_leave_type', { p_type_id: typeId });
+      if (error) throw error;
+      setLeaveTypes((prev) => prev.filter((t) => t.id !== typeId));
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message || '휴가 유형 삭제에 실패했습니다.' };
     }
-
-    setLeaveTypes((prev) => prev.filter((t) => t.id !== typeId));
-    return { success: true };
   };
 
-  const toggleLeaveTypeActive = (typeId: string) => {
-    setLeaveTypes((prev) =>
-      prev.map((t) => (t.id === typeId ? { ...t, isActive: !t.isActive } : t))
-    );
+  const toggleLeaveTypeActive = async (typeId: string) => {
+    const target = leaveTypes.find((t) => t.id === typeId);
+    if (!target) return { success: false, error: '휴가 유형을 찾을 수 없습니다.' };
+    try {
+      const { error } = await supabase.rpc('set_leave_type_active', {
+        p_type_id: typeId,
+        p_active: !target.isActive,
+      });
+      if (error) throw error;
+      setLeaveTypes((prev) => prev.map((t) => t.id === typeId ? { ...t, isActive: !t.isActive } : t));
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message || '휴가 유형 상태 변경에 실패했습니다.' };
+    }
   };
 
   // Admin proxy leave request (대리 신청) - Supabase 중앙 DB 영구 저장
@@ -673,26 +700,33 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return { success: true };
   };
 
-  // Delete leave request (Admin or Applicant)
-  const deleteLeaveRequest = (requestId: string) => {
+  // Delete leave request - Supabase DB에서도 영구 삭제, 승인건은 연차 자동 환원
+  const deleteLeaveRequest = async (requestId: string) => {
     const targetRequest = leaveRequests.find((r) => r.id === requestId);
-    if (!targetRequest) {
-      return { success: false, error: '신청 내역을 찾을 수 없습니다.' };
-    }
+    if (!targetRequest) return { success: false, error: '신청 내역을 찾을 수 없습니다.' };
 
-    const reqYear = targetRequest.startDate ? parseInt(targetRequest.startDate.slice(0, 4), 10) : workYear;
-
-    // If already approved, refund deducted days back to the employee
-    if (targetRequest.status === 'APPROVED') {
-      const leaveType = leaveTypes.find((t) => t.id === targetRequest.leaveTypeId);
-      const deduction = calculateLeaveDeduction(leaveType, targetRequest.requestedDays);
-      if (deduction > 0) {
-        updateUserUsedDays(targetRequest.userId, -deduction, reqYear);
+    const isDbId = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(requestId);
+    try {
+      if (isDbId) {
+        const { error } = await supabase.rpc('delete_leave_request_permanently', {
+          p_request_id: requestId,
+        });
+        if (error) throw error;
+        // DB RPC가 quota까지 원자적으로 환원하므로 사용자/연차 데이터를 다시 읽도록 이벤트 발생
+        window.dispatchEvent(new CustomEvent('leave-db-changed'));
+      } else if (targetRequest.status === 'APPROVED') {
+        // 과거 localStorage 전용 데이터는 기존 방식으로 환원
+        const reqYear = targetRequest.startDate ? parseInt(targetRequest.startDate.slice(0, 4), 10) : workYear;
+        const leaveType = leaveTypes.find((t) => t.id === targetRequest.leaveTypeId);
+        const deduction = calculateLeaveDeduction(leaveType, targetRequest.requestedDays);
+        if (deduction > 0) updateUserUsedDays(targetRequest.userId, -deduction, reqYear);
       }
-    }
 
-    setLeaveRequests((prev) => prev.filter((r) => r.id !== requestId));
-    return { success: true };
+      setLeaveRequests((prev) => prev.filter((r) => r.id !== requestId));
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message || '휴가 신청 내역 삭제에 실패했습니다.' };
+    }
   };
 
   // Adjust quota (Admin only)
