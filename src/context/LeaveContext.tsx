@@ -40,7 +40,7 @@ interface LeaveContextType {
     }
   ) => { success: boolean; error?: string };
   deleteLeaveRequest: (requestId: string) => Promise<{ success: boolean; error?: string }>;
-  approveLeaveRequest: (requestId: string, comment?: string) => { success: boolean; error?: string };
+  approveLeaveRequest: (requestId: string, comment?: string) => Promise<{ success: boolean; error?: string }>;
   rejectLeaveRequest: (requestId: string, rejectionReason?: string) => { success: boolean; error?: string };
   cancelLeaveRequest: (requestId: string) => { success: boolean; error?: string };
   adjustQuota: (targetUserId: string, newDays: number, reason?: string, year?: number) => { success: boolean; error?: string };
@@ -458,9 +458,9 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return { success: true };
   };
 
-  // Approve leave request (Admin only)
-  const approveLeaveRequest = (requestId: string, _comment?: string) => {
-    if (!currentUser || currentUser.role !== 'ADMIN') {
+  // Approve leave request (Admin only) - Supabase DB atomic approval
+  const approveLeaveRequest = async (requestId: string, _comment?: string): Promise<{ success: boolean; error?: string }> => {
+    if (!currentUser || (currentUser.role !== 'ADMIN' && currentUser.role !== 'SUPER_ADMIN')) {
       return { success: false, error: '관리자 권한이 필요합니다.' };
     }
 
@@ -477,55 +477,41 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const deduction = calculateLeaveDeduction(leaveType, targetRequest.requestedDays);
     const reqYear = targetRequest.startDate ? parseInt(targetRequest.startDate.slice(0, 4), 10) : workYear;
 
-    const now = new Date();
-    const formattedNow = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-      now.getDate()
-    ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(
-      now.getMinutes()
-    ).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    try {
+      // DB에서 신청 상태 변경 + 사용연차 차감을 한 트랜잭션으로 처리합니다.
+      const { error } = await supabase.rpc('approve_leave_request', { p_request_id: requestId });
+      if (error) throw error;
 
-    setLeaveRequests((prev) =>
-      prev.map((r) =>
-        r.id === requestId
-          ? {
-              ...r,
-              status: 'APPROVED',
-              processedAt: formattedNow,
-              processedBy: `${currentUser.name} (${currentUser.position})`,
-            }
-          : r
-      )
-    );
+      const now = new Date();
+      const formattedNow = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+        now.getDate()
+      ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(
+        now.getMinutes()
+      ).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
 
-    // Deduct leave days from employee with target year
-    if (deduction > 0) {
-      updateUserUsedDays(targetRequest.userId, deduction, reqYear);
+      // 즉시 화면에도 반영합니다. 실제 영구 값은 위 RPC가 DB에 저장합니다.
+      setLeaveRequests((prev) =>
+        prev.map((r) =>
+          r.id === requestId
+            ? {
+                ...r,
+                status: 'APPROVED',
+                processedAt: formattedNow,
+                processedBy: `${currentUser.name} (${currentUser.position})`,
+              }
+            : r
+        )
+      );
+
+      if (deduction > 0) {
+        updateUserUsedDays(targetRequest.userId, deduction, reqYear);
+      }
+
+      return { success: true };
+    } catch (e: any) {
+      console.error('Failed to approve leave request in Supabase', e);
+      return { success: false, error: e?.message || '휴가 승인 처리 중 오류가 발생했습니다.' };
     }
-
-    const approveTimestamp = reqYear === 2027 ? `${targetRequest.startDate || '2027-01-01'} 10:00:00` : undefined;
-    auditLog?.addAuditLog({
-      actionType: 'LEAVE_APPROVE',
-      actionTitle: `${reqYear}년도 휴가 결재 승인 (${targetRequest.userName})`,
-      userId: targetRequest.userId,
-      userName: targetRequest.userName,
-      userDepartment: targetRequest.userDepartment,
-      userPosition: targetRequest.userPosition,
-      operatorId: currentUser.id,
-      operatorName: `${currentUser.name} (${currentUser.position})`,
-      operatorRole: currentUser.role,
-      timestamp: approveTimestamp,
-      ipAddress: '192.168.1.12',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `${targetRequest.userName} 직원의 ${reqYear}년도 ${targetRequest.leaveTypeName} ${targetRequest.requestedDays}일 (${targetRequest.startDate} ~ ${targetRequest.endDate}) 결재가 최종 승인되었습니다. (연차 ${deduction}일 차감 반영)`,
-      diff: {
-        fields: [
-          { label: '결재 상태', key: 'status', before: '대기 (PENDING)', after: '승인 (APPROVED)' },
-          { label: `${reqYear}년도 연차 차감`, key: 'deduction', before: '0일', after: `${deduction}일` },
-        ],
-      },
-    });
-
-    return { success: true };
   };
 
   // Reject leave request (Admin only)
