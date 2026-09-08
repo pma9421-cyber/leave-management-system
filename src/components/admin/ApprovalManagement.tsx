@@ -78,16 +78,18 @@ export const ApprovalManagement: React.FC = () => {
     );
   }, [activeTab, pendingRequests, processedRequests, searchQuery]);
 
-  const handleApprove = (req: LeaveRequest) => {
+  const handleApprove = async (req: LeaveRequest) => {
     const leaveType = leaveTypes.find((t) => t.id === req.leaveTypeId);
     const deduction = calculateLeaveDeduction(leaveType, req.requestedDays);
 
-    const res = approveLeaveRequest(req.id);
+    const res = await approveLeaveRequest(req.id);
     if (res.success) {
       setSuccessMsg(
         `${req.userName}님의 ${req.leaveTypeName} ${req.requestedDays}일 신청이 승인되었습니다. (연차 ${deduction}일 차감 반영)`
       );
       setTimeout(() => setSuccessMsg(''), 4000);
+    } else {
+      window.alert(res.error || '승인 처리 중 오류가 발생했습니다.');
     }
   };
 
