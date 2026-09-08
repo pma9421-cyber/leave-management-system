@@ -19,7 +19,7 @@ interface LeaveContextType {
     endDate: string;
     reason?: string;
     requestedDays: number;
-  }) => { success: boolean; error?: string };
+  }) => Promise<{ success: boolean; error?: string }>;
   adminProxySubmitLeave: (data: {
     targetUserId: string;
     leaveTypeId: string;
@@ -206,11 +206,9 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           };
         });
 
-        setLeaveRequests((prev) => {
-          const dbIds = new Set(mappedRequests.map((r) => r.id));
-          const localOnly = prev.filter((r) => !dbIds.has(r.id) && !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(r.id));
-          return [...mappedRequests, ...localOnly];
-        });
+        // Supabase DB를 휴가신청의 단일 기준으로 사용합니다.
+        // 과거 localStorage에서 만든 req-... 임시 ID는 UUID RPC와 호환되지 않으므로 복원하지 않습니다.
+        setLeaveRequests(mappedRequests);
       } catch (e) {
         console.error('Failed to hydrate leave data from Supabase', e);
       }
@@ -380,82 +378,81 @@ export const LeaveProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Submit leave request as Employee
-  const submitLeaveRequest = (data: {
+  // Submit leave request as Employee - Supabase DB에 먼저 저장하고 DB UUID를 사용
+  const submitLeaveRequest = async (data: {
     leaveTypeId: string;
     startDate: string;
     endDate: string;
     reason: string;
     requestedDays: number;
-  }) => {
-    if (!currentUser) {
-      return { success: false, error: '로그인이 필요합니다.' };
-    }
+  }): Promise<{ success: boolean; error?: string }> => {
+    if (!currentUser) return { success: false, error: '로그인이 필요합니다.' };
 
     const leaveType = leaveTypes.find((t) => t.id === data.leaveTypeId);
-    if (!leaveType) {
-      return { success: false, error: '유효하지 않은 휴가 유형입니다.' };
-    }
+    if (!leaveType) return { success: false, error: '유효하지 않은 휴가 유형입니다.' };
+    if (!data.startDate || !data.endDate) return { success: false, error: '휴가 시작일과 종료일을 지정해 주세요.' };
+    if (data.requestedDays <= 0) return { success: false, error: '유효한 휴가 일수를 계산할 수 없습니다.' };
 
-    if (!data.startDate || !data.endDate) {
-      return { success: false, error: '휴가 시작일과 종료일을 지정해 주세요.' };
-    }
-
-    if (data.requestedDays <= 0) {
-      return { success: false, error: '유효한 휴가 일수를 계산할 수 없습니다.' };
-    }
-
-    // Check quota balance if leave type deducts annual leave
-    const reqYear = data.startDate ? parseInt(data.startDate.slice(0, 4), 10) : workYear;
+    const reqYear = parseInt(data.startDate.slice(0, 4), 10) || workYear;
     const quota = getUserQuota(currentUser.id, reqYear);
     const remainingDays = Number((quota.totalLeaveDays - quota.usedLeaveDays).toFixed(1));
     const effectiveDeduction = calculateLeaveDeduction(leaveType, data.requestedDays);
 
-    // 연차 초과(가불/마이너스) 사용 허용: 잔여 연차를 초과하더라도 신청 가능하며 결재 시 남은 연차가 음수로 표기됨
+    try {
+      const { data: inserted, error } = await supabase
+        .from('leave_requests')
+        .insert({
+          company_id: currentUser.companyId,
+          user_id: currentUser.id,
+          leave_type_id: leaveType.id,
+          start_date: data.startDate,
+          end_date: data.endDate,
+          requested_days: data.requestedDays,
+          reason: data.reason?.trim() || null,
+          status: 'PENDING',
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
 
-    const now = new Date();
-    const formattedNow = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-      now.getDate()
-    ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(
-      now.getMinutes()
-    ).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+      const newRequest: LeaveRequest = {
+        id: inserted.id,
+        userId: inserted.user_id,
+        userName: currentUser.name,
+        userDepartment: currentUser.department,
+        userPosition: currentUser.position,
+        leaveTypeId: inserted.leave_type_id,
+        leaveTypeName: leaveType.name,
+        startDate: inserted.start_date,
+        endDate: inserted.end_date,
+        requestedDays: Number(inserted.requested_days),
+        reason: inserted.reason || '',
+        status: inserted.status,
+        appliedAt: inserted.created_at ? String(inserted.created_at).replace('T', ' ').slice(0, 19) : '',
+      };
 
-    const newRequest: LeaveRequest = {
-      id: `req-${Date.now()}`,
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userDepartment: currentUser.department,
-      userPosition: currentUser.position,
-      leaveTypeId: leaveType.id,
-      leaveTypeName: leaveType.name,
-      startDate: data.startDate,
-      endDate: data.endDate,
-      requestedDays: data.requestedDays,
-      reason: data.reason?.trim() || '',
-      status: 'PENDING',
-      appliedAt: formattedNow,
-    };
+      setLeaveRequests((prev) => [newRequest, ...prev.filter((r) => r.id !== newRequest.id && !r.id.startsWith('req-'))]);
 
-    setLeaveRequests((prev) => [newRequest, ...prev]);
+      auditLog?.addAuditLog({
+        actionType: 'LEAVE_APPLY',
+        actionTitle: `${reqYear}년도 휴가 신청 접수 (${currentUser.name})`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userDepartment: currentUser.department,
+        userPosition: currentUser.position,
+        operatorId: currentUser.id,
+        operatorName: currentUser.name,
+        operatorRole: currentUser.role,
+        ipAddress: '192.168.1.12',
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
+        details: `${currentUser.name} 직원이 ${reqYear}년도 ${leaveType.name} ${data.requestedDays}일 휴가를 신청했습니다. (예상 잔여: ${remainingDays - effectiveDeduction}일)`,
+      });
 
-    const applyTimestamp = reqYear === 2027 ? `${data.startDate} 09:00:00` : undefined;
-    auditLog?.addAuditLog({
-      actionType: 'LEAVE_APPLY',
-      actionTitle: `${reqYear}년도 휴가 신청 접수 (${currentUser.name})`,
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userDepartment: currentUser.department,
-      userPosition: currentUser.position,
-      operatorId: currentUser.id,
-      operatorName: currentUser.name,
-      operatorRole: currentUser.role,
-      timestamp: applyTimestamp,
-      ipAddress: '192.168.1.12',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `${currentUser.name} 직원이 ${reqYear}년도 ${leaveType.name} ${data.requestedDays}일 (${data.startDate} ~ ${data.endDate}) 휴가를 신청하였습니다. (예상 잔여: ${remainingDays - effectiveDeduction}일)`,
-    });
-
-    return { success: true };
+      return { success: true };
+    } catch (e: any) {
+      console.error('Failed to persist employee leave request', e);
+      return { success: false, error: e?.message || '휴가 신청을 중앙 DB에 저장하지 못했습니다.' };
+    }
   };
 
   // Approve leave request (Admin only) - Supabase DB atomic approval
