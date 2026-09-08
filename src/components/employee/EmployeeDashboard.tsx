@@ -30,15 +30,18 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({
     return leaveRequests.filter((r) => r.userId === currentUser.id);
   }, [leaveRequests, currentUser.id]);
 
-  // Read user quota breakdown
+  // Read the selected year's quota from the central DB-backed quota object.
+  // Do not use currentUser.usedLeaveDays here because it can be stale after logout/login.
   const currentQuota = getUserQuota(currentUser.id, selectedYear);
-  const statutory = typeof currentUser.statutoryLeaveDays === 'number' ? currentUser.statutoryLeaveDays : 15;
-  const carried = typeof currentUser.carriedOverLeaveDays === 'number' ? currentUser.carriedOverLeaveDays : 0;
-  const compensatory = typeof currentUser.compensatoryLeaveDays === 'number' ? currentUser.compensatoryLeaveDays : 0;
-  const totalLeave = Number((statutory + carried + compensatory).toFixed(1));
-  const usedLeave = currentUser.usedLeaveDays ?? 0;
+  const statutory = Number(currentQuota.statutoryLeaveDays ?? currentQuota.baseQuota ?? 0);
+  const carried = Number(currentQuota.carriedOverLeaveDays ?? currentQuota.carryOverDays ?? 0);
+  const compensatory = Number(currentQuota.compensatoryLeaveDays ?? 0);
+  const totalLeave = Number((currentQuota.totalLeaveDays ?? (statutory + carried + compensatory)).toFixed(1));
+
+  // Used leave is a positive consumed amount. Remaining leave may become negative.
+  const usedLeave = Number((currentQuota.usedLeaveDays ?? 0).toFixed(1));
   const remainingLeave = Number((totalLeave - usedLeave).toFixed(1));
-  const usagePercentage = totalLeave > 0 ? Math.min(100, Math.round((usedLeave / totalLeave) * 100)) : 0;
+  const usagePercentage = totalLeave > 0 ? Math.max(0, Math.round((usedLeave / totalLeave) * 100)) : usedLeave > 0 ? 100 : 0;
 
   // Pending count for current user
   const pendingCount = myRequests.filter((r) => r.status === 'PENDING').length;
