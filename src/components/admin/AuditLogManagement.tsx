@@ -191,11 +191,11 @@ export const AuditLogManagement: React.FC = () => {
   const pendingPwCount = passwordResetRequests.filter((r) => r.status === 'PENDING').length;
 
   // Handle Quota Limit Update
-  const handleSaveBizLimit = (bizNum: string) => {
+  const handleSaveBizLimit = async (bizNum: string) => {
     const val = editingBizLimits[bizNum] ?? getBusinessAdminLimit(bizNum);
-    const res = setBusinessAdminLimit(bizNum, val);
+    const res = await setBusinessAdminLimit(bizNum, val);
     if (res.success) {
-      showToast(`사업자번호 [${bizNum}] 관리자 생성 한도가 ${val}개로 저장되었습니다.`);
+      showToast(`사업자번호 [${bizNum}] 관리자 생성 한도가 ${val}개로 중앙 DB에 저장되었습니다.`);
     } else {
       showToast(res.error || '한도 저장 실패');
     }
