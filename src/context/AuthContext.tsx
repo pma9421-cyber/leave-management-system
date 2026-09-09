@@ -940,7 +940,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (signInError || !existingAuth.user) {
         return {
           success: false,
-          error: '이미 가입된 이메일입니다. 이전 가입 시 사용한 비밀번호로 다시 시도하거나, 비밀번호 찾기를 이용해 주세요.',
+          error: '이미 인증 계정이 존재하지만 가입정보 연결이 완료되지 않았을 수 있습니다. 이전 비밀번호로 다시 시도하거나, [비밀번호 찾기]에서 사업자번호·이메일·성명을 입력해 관리자 임시 비밀번호를 요청해 주세요.',
         };
       }
 
