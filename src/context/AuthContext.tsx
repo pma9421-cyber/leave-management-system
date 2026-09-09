@@ -109,7 +109,7 @@ interface AuthContextType {
   // Business admin limits
   businessAdminLimits: BusinessAdminLimit[];
   getBusinessAdminLimit: (businessNumber: string) => number;
-  setBusinessAdminLimit: (businessNumber: string, maxLimit: number, companyName?: string) => { success: boolean; error?: string };
+  setBusinessAdminLimit: (businessNumber: string, maxLimit: number, companyName?: string) => Promise<{ success: boolean; error?: string }>;
   updateCompanyName: (businessNumber: string, newCompanyName: string) => Promise<{ success: boolean; error?: string }>;
 }
 
@@ -249,6 +249,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (companyError) throw companyError;
     if (quotaError) throw quotaError;
+
+    // Supabase companies.max_admin_count is the source of truth for administrator limits.
+    // Keep the local state only as a UI cache so logout/login or another PC sees the same value.
+    setBusinessAdminLimits(
+      (companyRows || []).map((c: any) => ({
+        businessNumber: formatBizNum(c.business_number || ''),
+        companyName: c.company_name || '회사',
+        maxAdminCount: Number(c.max_admin_count || 1),
+        updatedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
+        updatedBy: 'DB',
+      }))
+    );
 
     const companiesById = new Map((companyRows || []).map((c: any) => [c.id, c]));
     const quotasByUser = new Map<string, any[]>();
@@ -456,71 +468,88 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return found ? found.maxAdminCount : 1; // Default 1
   };
 
-  // Helper to set max admin quota for a business (Super Admin only)
-  const setBusinessAdminLimit = (
+  // Helper to set max admin quota for a business (Super Admin only).
+  // IMPORTANT: persist to Supabase; localStorage is only a cache.
+  const setBusinessAdminLimit = async (
     businessNumber: string,
     maxLimit: number,
     companyName?: string
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     if (maxLimit < 1) {
       return { success: false, error: '관리자 계정 허용 한도는 최소 1개 이상이어야 합니다.' };
     }
+    if (!currentUser || currentUser.role !== 'SUPER_ADMIN') {
+      return { success: false, error: '최고관리자만 관리자 계정 생성 한도를 변경할 수 있습니다.' };
+    }
+
     const formatted = formatBizNum(businessNumber);
     const norm = normalizeBizNum(businessNumber);
-
     const prevLimit = getBusinessAdminLimit(businessNumber);
 
-    setBusinessAdminLimits((prev) => {
-      const exists = prev.some((b) => normalizeBizNum(b.businessNumber) === norm);
+    try {
+      const { data: result, error } = await supabase.rpc('set_company_admin_limit', {
+        p_business_number: norm,
+        p_max_admin_count: maxLimit,
+      });
+      if (error) throw error;
+
+      const savedLimit = Number((result as any)?.max_admin_count ?? maxLimit);
+      const savedCompanyName = (result as any)?.company_name || companyName || '회사';
       const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
-      if (exists) {
-        return prev.map((b) =>
-          normalizeBizNum(b.businessNumber) === norm
-            ? {
-                ...b,
-                maxAdminCount: maxLimit,
-                companyName: companyName || b.companyName,
-                updatedAt: now,
-                updatedBy: currentUser?.name || 'admin',
-              }
-            : b
-        );
-      } else {
+
+      setBusinessAdminLimits((prev) => {
+        const exists = prev.some((b) => normalizeBizNum(b.businessNumber) === norm);
+        if (exists) {
+          return prev.map((b) =>
+            normalizeBizNum(b.businessNumber) === norm
+              ? {
+                  ...b,
+                  maxAdminCount: savedLimit,
+                  companyName: savedCompanyName || b.companyName,
+                  updatedAt: now,
+                  updatedBy: currentUser.name || 'admin',
+                }
+              : b
+          );
+        }
         return [
           ...prev,
           {
             businessNumber: formatted,
-            companyName: companyName || '회사',
-            maxAdminCount: maxLimit,
+            companyName: savedCompanyName,
+            maxAdminCount: savedLimit,
             updatedAt: now,
-            updatedBy: currentUser?.name || 'admin',
+            updatedBy: currentUser.name || 'admin',
           },
         ];
-      }
-    });
+      });
 
-    auditLog?.addAuditLog({
-      actionType: 'QUOTA_CHANGE',
-      actionTitle: '사업자번호별 관리자 계정 생성 한도 변경',
-      userId: currentUser?.id || 'admin',
-      userName: currentUser?.name || 'admin',
-      userEmail: currentUser?.email || 'admin@segyotax.com',
-      userRole: 'SUPER_ADMIN',
-      operatorId: currentUser?.id || 'admin',
-      operatorName: currentUser ? `${currentUser.name} (최고관리자)` : 'admin (최고관리자)',
-      operatorRole: 'SUPER_ADMIN',
-      ipAddress: '192.168.1.1',
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
-      details: `사업자번호 [${formatted}] 관리자 계정 최대 생성 한도를 ${prevLimit}개에서 ${maxLimit}개로 수정 설정하였습니다.`,
-      diff: {
-        fields: [
-          { label: '사업자등록번호', key: 'businessNumber', before: formatted, after: formatted },
-          { label: '관리자 최대 한도', key: 'maxAdminCount', before: `${prevLimit}개`, after: `${maxLimit}개` },
-        ],
-      },
-    });
+      auditLog?.addAuditLog({
+        actionType: 'QUOTA_CHANGE',
+        actionTitle: '사업자번호별 관리자 계정 생성 한도 변경',
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userEmail: currentUser.email,
+        userRole: 'SUPER_ADMIN',
+        operatorId: currentUser.id,
+        operatorName: `${currentUser.name} (최고관리자)`,
+        operatorRole: 'SUPER_ADMIN',
+        ipAddress: '192.168.1.1',
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web-Client',
+        details: `사업자번호 [${formatted}] 관리자 계정 최대 생성 한도를 ${prevLimit}개에서 ${savedLimit}개로 DB에 저장하였습니다.`,
+        diff: {
+          fields: [
+            { label: '사업자등록번호', key: 'businessNumber', before: formatted, after: formatted },
+            { label: '관리자 최대 한도', key: 'maxAdminCount', before: `${prevLimit}개`, after: `${savedLimit}개` },
+          ],
+        },
+      });
 
-    return { success: true };
+      return { success: true };
+    } catch (e: any) {
+      console.error('Failed to persist business admin limit', e);
+      return { success: false, error: e?.message || '관리자 생성 한도 저장에 실패했습니다.' };
+    }
   };
 
   // Update company name in Supabase. The database is the source of truth.
@@ -847,43 +876,110 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, error: '최고관리자 계정은 회원가입으로 생성할 수 없습니다.' };
     }
 
-    const { data: signUpData, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          name: data.name.trim(),
-          business_number: businessNumber,
-          company_name: (data.companyName || '').trim(),
-          department: (data.department || '').trim(),
-          position: (data.position || '사원').trim(),
-          requested_role: data.role === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
-          joined_date: new Date().toISOString().slice(0, 10),
-        },
-      },
-    });
-
-    if (error) {
-      return { success: false, error: error.message || '회원가입에 실패했습니다.' };
-    }
-
-    // 회원가입 이메일 인증을 사용하지 않는 운영 방식입니다.
-    // Supabase의 Confirm email을 OFF로 두면 signUp 직후 세션이 생성되므로
-    // 즉시 profiles를 만들고, 가입 완료 후에는 자동 로그인되지 않도록 로그아웃합니다.
-    if (signUpData.session?.user) {
-      try {
-        await ensureProfileForAuthUser(signUpData.session.user);
-        await supabase.auth.signOut();
-      } catch (e: any) {
-        return { success: false, error: e?.message || '프로필 생성에 실패했습니다.' };
+    // Before creating an Auth user, ask the DB whether another ADMIN slot is available.
+    // This prevents an orphan auth.users row when the company is already at its limit.
+    if (data.role === 'ADMIN') {
+      const { data: availability, error: availabilityError } = await supabase.rpc('check_admin_registration_capacity', {
+        p_business_number: businessNumber,
+      });
+      if (availabilityError) {
+        return { success: false, error: availabilityError.message || '관리자 생성 한도를 확인하지 못했습니다.' };
+      }
+      const cap: any = availability || {};
+      if (cap.allowed === false) {
+        return {
+          success: false,
+          error: `해당 사업장의 관리자 계정 생성 한도(${cap.max_admin_count ?? 1}개)에 도달했습니다. 최고관리자에게 한도 증설을 요청하세요.`,
+        };
       }
     }
 
-    if (!signUpData.session?.user) {
+    const metadata = {
+      name: data.name.trim(),
+      business_number: businessNumber,
+      company_name: (data.companyName || '').trim(),
+      department: (data.department || '').trim(),
+      position: (data.position || '사원').trim(),
+      requested_role: data.role === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+      joined_date: new Date().toISOString().slice(0, 10),
+    };
+
+    const finishProfileRegistration = async (authUser: any) => {
+      // Refresh metadata so a previously-created orphan Auth account can be recovered safely
+      // only when the registrant proves the existing password.
+      await supabase.auth.updateUser({ data: metadata });
+      const profile = await ensureProfileForAuthUser({ ...authUser, user_metadata: metadata });
+      return profile;
+    };
+
+    let signUpData: any = null;
+    let signUpError: any = null;
+    ({ data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: metadata },
+    }));
+
+    if (signUpError) {
+      const msg = (signUpError.message || '').toLowerCase();
+      const alreadyRegistered =
+        msg.includes('already registered') ||
+        msg.includes('already been registered') ||
+        msg.includes('user already exists');
+
+      if (!alreadyRegistered) {
+        return { success: false, error: signUpError.message || '회원가입에 실패했습니다.' };
+      }
+
+      // A previous attempt may have created auth.users but failed before profiles was created
+      // (for example because the ADMIN limit was 1). Recover only if the same password proves ownership.
+      const { data: existingAuth, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (signInError || !existingAuth.user) {
+        return {
+          success: false,
+          error: '이미 가입된 이메일입니다. 이전 가입 시 사용한 비밀번호로 다시 시도하거나, 비밀번호 찾기를 이용해 주세요.',
+        };
+      }
+
+      try {
+        const { data: existingProfile, error: profileLookupError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('id', existingAuth.user.id)
+          .maybeSingle();
+        if (profileLookupError) throw profileLookupError;
+        if (existingProfile) {
+          await supabase.auth.signOut();
+          return { success: false, error: '이미 시스템에 등록된 이메일 주소입니다. 로그인해 주세요.' };
+        }
+
+        await finishProfileRegistration(existingAuth.user);
+        await supabase.auth.signOut();
+        return { success: true, isPending: data.role !== 'ADMIN' };
+      } catch (e: any) {
+        await supabase.auth.signOut();
+        return { success: false, error: e?.message || '기존 인증 계정의 가입 정보를 복구하지 못했습니다.' };
+      }
+    }
+
+    if (!signUpData?.session?.user) {
       return {
         success: false,
         error: 'Supabase의 Confirm email 설정이 켜져 있습니다. Authentication > Sign In / Providers에서 Confirm email을 OFF로 변경해 주세요.',
       };
+    }
+
+    try {
+      await finishProfileRegistration(signUpData.session.user);
+      await supabase.auth.signOut();
+    } catch (e: any) {
+      // Do not delete auth.users automatically: preserving existing accounts/data is safer.
+      // A later registration with the same email/password can safely recover this orphan account.
+      await supabase.auth.signOut();
+      return { success: false, error: e?.message || '프로필 생성에 실패했습니다.' };
     }
 
     return { success: true, isPending: data.role !== 'ADMIN' };
