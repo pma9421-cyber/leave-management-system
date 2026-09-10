@@ -164,6 +164,7 @@ function MainApp() {
           <>
             {activeTab === 'admin-dashboard' && (
               <AdminDashboard
+                viewMode="dashboard"
                 onNavigateToApprovals={() => setActiveTab('admin-approvals')}
               />
             )}
@@ -173,11 +174,10 @@ function MainApp() {
             {activeTab === 'admin-employees' && <EmployeeManagement />}
 
             {activeTab === 'admin-quotas' && (
-              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-                <AdminDashboard
-                  onNavigateToApprovals={() => setActiveTab('admin-approvals')}
-                />
-              </div>
+              <AdminDashboard
+                viewMode="quota"
+                onNavigateToApprovals={() => setActiveTab('admin-approvals')}
+              />
             )}
 
             {activeTab === 'admin-types' && (
