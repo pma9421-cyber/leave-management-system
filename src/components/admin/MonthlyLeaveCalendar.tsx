@@ -86,7 +86,7 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [visibleMonth, setVisibleMonth] = useState<Date>(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDateIso, setSelectedDateIso] = useState<string | null>(null);
-  const [desktopPopoverStyle, setDesktopPopoverStyle] = useState<{ top: number; left: number } | null>(null);
+  const [popoverStyle, setPopoverStyle] = useState<{ top: number; left: number; width: number } | null>(null);
 
   const approvedRequests = useMemo(
     () => requests.filter((request) => request.status === 'APPROVED' && request.startDate && request.endDate),
@@ -122,7 +122,6 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
   const visibleMonthLabel = `${visibleMonth.getFullYear()}.${`${visibleMonth.getMonth() + 1}`.padStart(2, '0')}`;
   const selectedDate = selectedDateIso ? parseLocalDate(selectedDateIso) : null;
   const selectedEntries = selectedDateIso ? (entriesByDate.get(selectedDateIso) ?? []) : [];
-  const isMobileView = typeof window !== 'undefined' ? window.innerWidth < 640 : false;
 
   const moveMonth = (offset: number) => {
     setVisibleMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
@@ -134,28 +133,36 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
 
   const closePopover = () => {
     setSelectedDateIso(null);
-    setDesktopPopoverStyle(null);
+    setPopoverStyle(null);
   };
 
-  const openPopover = (iso: string, element: HTMLButtonElement | HTMLDivElement) => {
+  const openPopover = (iso: string, element: HTMLButtonElement) => {
     setSelectedDateIso(iso);
 
-    if (typeof window !== 'undefined' && window.innerWidth >= 640 && containerRef.current) {
-      const containerRect = containerRef.current.getBoundingClientRect();
-      const cellRect = element.getBoundingClientRect();
-      const popoverWidth = 280;
-      const horizontalPadding = 8;
-      let left = cellRect.left - containerRect.left + (cellRect.width / 2) - (popoverWidth / 2);
-      left = Math.max(horizontalPadding, left);
-      left = Math.min(left, containerRect.width - popoverWidth - horizontalPadding);
-      const top = cellRect.bottom - containerRect.top + 8;
-      setDesktopPopoverStyle({ top, left });
-    } else {
-      setDesktopPopoverStyle(null);
+    if (!containerRef.current || typeof window === 'undefined') {
+      setPopoverStyle(null);
+      return;
     }
+
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const cellRect = element.getBoundingClientRect();
+    const isMobile = window.innerWidth < 640;
+    const desiredWidth = isMobile ? 188 : 280;
+    const horizontalPadding = isMobile ? 6 : 8;
+
+    let left = cellRect.left - containerRect.left;
+    if (!isMobile) {
+      left = left + (cellRect.width / 2) - (desiredWidth / 2);
+    }
+
+    left = Math.max(horizontalPadding, left);
+    left = Math.min(left, containerRect.width - desiredWidth - horizontalPadding);
+
+    const top = cellRect.bottom - containerRect.top + 6;
+    setPopoverStyle({ top, left, width: desiredWidth });
   };
 
-  const handleCellClick = (iso: string, count: number, element: HTMLButtonElement | HTMLDivElement) => {
+  const handleCellClick = (iso: string, count: number, element: HTMLButtonElement) => {
     if (count === 0) return;
 
     if (selectedDateIso === iso) {
@@ -185,18 +192,15 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
 
   useEffect(() => {
     const handleResize = () => {
-      if (!selectedDateIso) return;
-      if (typeof window !== 'undefined' && window.innerWidth < 640) {
-        setDesktopPopoverStyle(null);
-      }
+      closePopover();
     };
 
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [selectedDateIso]);
+  }, []);
 
   return (
-    <div ref={containerRef} className="relative bg-white rounded-xl border border-slate-200 p-2 sm:p-4 shadow-xs">
+    <div ref={containerRef} className="relative bg-white rounded-xl border border-slate-200 p-2 sm:p-4 shadow-xs overflow-visible">
       <div className="flex items-center justify-between gap-1 pb-2 sm:pb-3 border-b border-slate-100">
         <div className="min-w-0 shrink">
           <h3 className="text-[12px] sm:text-base font-bold text-slate-900 flex items-center gap-1 sm:gap-2 whitespace-nowrap">
@@ -359,70 +363,37 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
         </div>
       </div>
 
-      {selectedDateIso && selectedDate && selectedEntries.length > 0 && !isMobileView && desktopPopoverStyle && (
+      {selectedDateIso && selectedDate && selectedEntries.length > 0 && popoverStyle && (
         <div
           ref={popoverRef}
-          className="hidden sm:block absolute z-30 w-[280px] rounded-2xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.18)]"
-          style={{ top: desktopPopoverStyle.top, left: desktopPopoverStyle.left }}
+          className="absolute z-30 rounded-2xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.18)] overflow-hidden"
+          style={{ top: popoverStyle.top, left: popoverStyle.left, width: popoverStyle.width }}
         >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-            <div className="text-sm font-bold text-slate-900">{formatPopoverTitle(selectedDate)}</div>
+          <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-slate-100">
+            <div className="text-[13px] sm:text-sm font-bold text-slate-900">{formatPopoverTitle(selectedDate)}</div>
             <button
               type="button"
               onClick={closePopover}
-              className="w-7 h-7 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-100"
+              className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-100"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
           </div>
-          <div className="p-3 space-y-2 max-h-[280px] overflow-y-auto">
+          <div className="p-2.5 sm:p-3 space-y-2 max-h-[220px] sm:max-h-[280px] overflow-y-auto">
             {selectedEntries.map((entry) => (
               <div
                 key={`popover-${selectedDateIso}-${entry.requestId}-${entry.userId}`}
-                className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
+                className="flex items-center justify-between gap-2 sm:gap-3 rounded-xl border border-blue-100 sm:border-slate-200 bg-blue-50/40 sm:bg-slate-50 px-2.5 sm:px-3 py-2"
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0" />
-                  <span className="text-sm font-semibold text-slate-800 truncate">{entry.userName}</span>
+                  <span className="text-[13px] sm:text-sm font-semibold text-slate-800 truncate">{entry.userName}</span>
                 </div>
-                <div className="text-sm font-bold text-blue-700 shrink-0">
+                <div className="text-[13px] sm:text-sm font-bold text-blue-700 shrink-0">
                   {entry.leaveTypeName} ({formatRequestedDays(entry.requestedDays)})
                 </div>
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {selectedDateIso && selectedDate && selectedEntries.length > 0 && (
-        <div className="sm:hidden fixed inset-0 z-40 flex items-center justify-center bg-slate-900/15 px-4">
-          <div ref={popoverRef} className="w-full max-w-[285px] rounded-2xl border border-slate-200 bg-white shadow-[0_20px_44px_rgba(15,23,42,0.22)] overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-              <div className="text-[15px] font-bold text-slate-900">{formatPopoverTitle(selectedDate)}</div>
-              <button
-                type="button"
-                onClick={closePopover}
-                className="w-7 h-7 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-100"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-3 space-y-2 max-h-[320px] overflow-y-auto">
-              {selectedEntries.map((entry) => (
-                <div
-                  key={`mobile-popover-${selectedDateIso}-${entry.requestId}-${entry.userId}`}
-                  className="flex items-center justify-between gap-2 rounded-xl border border-blue-100 bg-blue-50/40 px-3 py-2"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0" />
-                    <span className="text-sm font-semibold text-slate-800 truncate">{entry.userName}</span>
-                  </div>
-                  <div className="text-sm font-bold text-blue-700 shrink-0">
-                    {entry.leaveTypeName} ({formatRequestedDays(entry.requestedDays)})
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       )}
