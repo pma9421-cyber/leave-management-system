@@ -315,10 +315,10 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
                   </div>
                 </div>
 
-                <div className="hidden sm:block p-2 min-h-[96px] lg:min-h-[108px]">
+                <div className="hidden sm:block p-1.5 min-h-[70px] lg:min-h-[76px]">
                   <div className="flex items-start justify-between gap-1">
                     <div
-                      className={`text-sm font-semibold ${
+                      className={`text-[12px] font-semibold ${
                         !cell.inCurrentMonth
                           ? 'text-slate-300'
                           : isSunday
@@ -329,7 +329,7 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
                       }`}
                     >
                       {isToday ? (
-                        <span className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full bg-slate-900 text-white text-[11px] font-bold">
+                        <span className="inline-flex items-center justify-center min-w-[20px] h-[18px] px-1 rounded-full bg-slate-900 text-white text-[10px] font-bold">
                           {cell.date.getDate()}
                         </span>
                       ) : (
@@ -338,22 +338,22 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
                     </div>
 
                     {uniqueUserCount > 0 && (
-                      <span className="inline-flex items-center justify-center min-w-[24px] h-5 px-1.5 rounded-full bg-blue-600 text-white text-[11px] font-bold shadow-sm">
+                      <span className="inline-flex items-center justify-center min-w-[22px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[10px] font-bold shadow-sm">
                         {uniqueUserCount}명
                       </span>
                     )}
                   </div>
 
-                  <div className="mt-1.5 space-y-1">
+                  <div className="mt-1 space-y-0.5">
                     {visibleEntries.map((entry) => (
-                      <div key={`${cell.iso}-${entry.requestId}-${entry.userId}`} className="text-[11px] leading-4 text-slate-700 font-medium">
+                      <div key={`${cell.iso}-${entry.requestId}-${entry.userId}`} className="text-[10px] leading-3.5 text-slate-700 font-medium">
                         <span className="font-bold text-slate-900">{entry.userName}</span>
                         <span className="text-blue-700"> ({entry.leaveTypeName})</span>
                       </div>
                     ))}
 
                     {extraCount > 0 && (
-                      <div className="text-[11px] font-semibold text-blue-600">+{extraCount}명 더보기</div>
+                      <div className="text-[10px] leading-3.5 font-semibold text-blue-600">+{extraCount}명 더보기</div>
                     )}
                   </div>
                 </div>
@@ -369,8 +369,8 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
           className="absolute z-30 rounded-2xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.18)] overflow-hidden"
           style={{ top: popoverStyle.top, left: popoverStyle.left, width: popoverStyle.width }}
         >
-          <div className="flex items-center justify-between px-2.5 sm:px-4 py-2 sm:py-3 border-b border-slate-100">
-            <div className="text-[11px] sm:text-sm font-bold text-slate-900">{formatPopoverTitle(selectedDate)}</div>
+          <div className="flex items-center justify-between px-2.5 sm:px-3 py-2 sm:py-2.5 border-b border-slate-100">
+            <div className="text-[11px] sm:text-[12px] font-bold text-slate-900">{formatPopoverTitle(selectedDate)}</div>
             <button
               type="button"
               onClick={closePopover}
@@ -379,17 +379,17 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
               <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
           </div>
-          <div className="p-2 sm:p-3 space-y-1.5 sm:space-y-2 max-h-[220px] sm:max-h-[280px] overflow-y-auto">
+          <div className="p-2 sm:p-2.5 space-y-1.5 sm:space-y-1.5 max-h-[220px] sm:max-h-[240px] overflow-y-auto">
             {selectedEntries.map((entry) => (
               <div
                 key={`popover-${selectedDateIso}-${entry.requestId}-${entry.userId}`}
-                className="flex items-center justify-between gap-1.5 sm:gap-3 rounded-lg sm:rounded-xl border border-blue-100 sm:border-slate-200 bg-blue-50/40 sm:bg-slate-50 px-2 sm:px-3 py-1.5 sm:py-2"
+                className="flex items-center justify-between gap-1.5 sm:gap-3 rounded-lg sm:rounded-xl border border-blue-100 sm:border-slate-200 bg-blue-50/40 sm:bg-slate-50 px-2 sm:px-2.5 py-1.5 sm:py-1.5"
               >
                 <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
                   <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-blue-600 shrink-0" />
-                  <span className="text-[10px] sm:text-sm font-semibold text-slate-800 leading-tight break-words">{entry.userName}</span>
+                  <span className="text-[10px] sm:text-[11px] font-semibold text-slate-800 leading-tight break-words">{entry.userName}</span>
                 </div>
-                <div className="text-[10px] sm:text-sm font-bold text-blue-700 shrink-0 whitespace-nowrap">
+                <div className="text-[10px] sm:text-[11px] font-bold text-blue-700 shrink-0 whitespace-nowrap">
                   {entry.leaveTypeName} ({formatRequestedDays(entry.requestedDays)})
                 </div>
               </div>
