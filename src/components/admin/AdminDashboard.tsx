@@ -29,10 +29,12 @@ import {
 
 interface AdminDashboardProps {
   onNavigateToApprovals: () => void;
+  viewMode?: 'dashboard' | 'quota';
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onNavigateToApprovals,
+  viewMode = 'dashboard',
 }) => {
   const { companyUsers: users, getUserQuota } = useAuth();
   const { leaveRequests, leaveTypes, quickAdjustQuota, workYear, setWorkYear } = useLeave();
@@ -97,7 +99,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      {/* Top Banner & Quick Management Header */}
+      {viewMode === 'dashboard' && (
+        <>
+            {/* Top Banner & Quick Management Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
@@ -225,6 +229,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onYearChange={(y) => setWorkYear(y)}
       />
 
+        </>
+      )}
+
+      {viewMode === 'quota' && (
+        <>
       {/* All Employees Leave Monitoring Table */}
       <div id="section-admin-employee-table" className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -434,6 +443,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </table>
         </div>
       </div>
+        </>
+      )}
 
       {/* Quota Management Modal */}
       <QuotaManagementModal
