@@ -147,7 +147,7 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
     const containerRect = containerRef.current.getBoundingClientRect();
     const cellRect = element.getBoundingClientRect();
     const isMobile = window.innerWidth < 640;
-    const desiredWidth = isMobile ? 188 : 280;
+    const desiredWidth = isMobile ? 208 : 280;
     const horizontalPadding = isMobile ? 6 : 8;
 
     let left = cellRect.left - containerRect.left;
@@ -369,8 +369,8 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
           className="absolute z-30 rounded-2xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.18)] overflow-hidden"
           style={{ top: popoverStyle.top, left: popoverStyle.left, width: popoverStyle.width }}
         >
-          <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-slate-100">
-            <div className="text-[13px] sm:text-sm font-bold text-slate-900">{formatPopoverTitle(selectedDate)}</div>
+          <div className="flex items-center justify-between px-2.5 sm:px-4 py-2 sm:py-3 border-b border-slate-100">
+            <div className="text-[11px] sm:text-sm font-bold text-slate-900">{formatPopoverTitle(selectedDate)}</div>
             <button
               type="button"
               onClick={closePopover}
@@ -379,17 +379,17 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
               <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
           </div>
-          <div className="p-2.5 sm:p-3 space-y-2 max-h-[220px] sm:max-h-[280px] overflow-y-auto">
+          <div className="p-2 sm:p-3 space-y-1.5 sm:space-y-2 max-h-[220px] sm:max-h-[280px] overflow-y-auto">
             {selectedEntries.map((entry) => (
               <div
                 key={`popover-${selectedDateIso}-${entry.requestId}-${entry.userId}`}
-                className="flex items-center justify-between gap-2 sm:gap-3 rounded-xl border border-blue-100 sm:border-slate-200 bg-blue-50/40 sm:bg-slate-50 px-2.5 sm:px-3 py-2"
+                className="flex items-center justify-between gap-1.5 sm:gap-3 rounded-lg sm:rounded-xl border border-blue-100 sm:border-slate-200 bg-blue-50/40 sm:bg-slate-50 px-2 sm:px-3 py-1.5 sm:py-2"
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0" />
-                  <span className="text-[13px] sm:text-sm font-semibold text-slate-800 truncate">{entry.userName}</span>
+                <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                  <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-blue-600 shrink-0" />
+                  <span className="text-[10px] sm:text-sm font-semibold text-slate-800 leading-tight break-words">{entry.userName}</span>
                 </div>
-                <div className="text-[13px] sm:text-sm font-bold text-blue-700 shrink-0">
+                <div className="text-[10px] sm:text-sm font-bold text-blue-700 shrink-0 whitespace-nowrap">
                   {entry.leaveTypeName} ({formatRequestedDays(entry.requestedDays)})
                 </div>
               </div>
