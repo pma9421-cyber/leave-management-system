@@ -117,56 +117,56 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 shadow-xs">
-      <div className="flex items-start sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+    <div className="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 shadow-xs">
+      <div className="flex items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
         <div>
-          <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-blue-600" />
+          <h3 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2">
+            <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
             <span>{title}</span>
-            <span className="hidden sm:inline text-xs font-medium text-slate-400">{subtitle}</span>
+            <span className="hidden sm:inline text-[11px] font-medium text-slate-400">{subtitle}</span>
           </h3>
-          <p className="sm:hidden text-[11px] text-slate-400 mt-1">{subtitle}</p>
+          <p className="sm:hidden text-[10px] text-slate-400 mt-0.5">{subtitle}</p>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
-          <div className="flex items-center rounded-xl border border-slate-200 bg-white px-1 py-1 shadow-xs">
+        <div className="flex items-center gap-1.5 self-start sm:self-auto">
+          <div className="flex items-center rounded-lg border border-slate-200 bg-white px-0.5 py-0.5 shadow-xs">
             <button
               type="button"
               onClick={() => moveMonth(-1)}
-              className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              className="w-6 h-6 rounded-md flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
               aria-label="이전 달"
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ChevronLeft className="w-3.5 h-3.5" />
             </button>
-            <div className="min-w-[84px] text-center text-sm font-bold text-slate-900 px-2">
+            <div className="min-w-[72px] text-center text-xs font-bold text-slate-900 px-1.5">
               {visibleMonthLabel}
             </div>
             <button
               type="button"
               onClick={() => moveMonth(1)}
-              className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              className="w-6 h-6 rounded-md flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
               aria-label="다음 달"
             >
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="w-3.5 h-3.5" />
             </button>
           </div>
 
           <button
             type="button"
             onClick={goToToday}
-            className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
+            className="px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
           >
             오늘
           </button>
         </div>
       </div>
 
-      <div className="mt-4">
-        <div className="grid grid-cols-7 gap-1.5 sm:gap-2 mb-2">
+      <div className="mt-3">
+        <div className="grid grid-cols-7 gap-1 sm:gap-1.5 mb-1.5">
           {WEEK_LABELS.map((label, index) => (
             <div
               key={label}
-              className={`text-center text-xs font-bold py-2 ${
+              className={`text-center text-[10px] font-bold py-1.5 ${
                 index === 0 ? 'text-rose-500' : index === 6 ? 'text-blue-600' : 'text-slate-500'
               }`}
             >
@@ -175,7 +175,7 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
           ))}
         </div>
 
-        <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+        <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
           {calendarCells.map((cell) => {
             const dayEntries = entriesByDate.get(cell.iso) ?? [];
             const uniqueUserCount = new Set(dayEntries.map((entry) => entry.userId)).size;
@@ -188,7 +188,7 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
             return (
               <div
                 key={cell.iso}
-                className={`relative rounded-xl border transition-colors overflow-hidden ${
+                className={`relative rounded-lg border transition-colors overflow-hidden ${
                   dayEntries.length > 0
                     ? 'border-blue-300 bg-blue-50/70'
                     : cell.inCurrentMonth
@@ -196,10 +196,10 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
                     : 'border-slate-100 bg-slate-50/70'
                 }`}
               >
-                <div className="p-1.5 sm:p-2 min-h-[72px] sm:min-h-[96px] lg:min-h-[108px]">
+                <div className="p-1 sm:p-1.5 min-h-[52px] sm:min-h-[68px] lg:min-h-[74px]">
                   <div className="flex items-start justify-between gap-1">
                     <div
-                      className={`text-xs sm:text-sm font-semibold ${
+                      className={`text-[11px] sm:text-xs font-semibold ${
                         !cell.inCurrentMonth
                           ? 'text-slate-300'
                           : isSunday
@@ -210,7 +210,7 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
                       }`}
                     >
                       {isToday ? (
-                        <span className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full bg-slate-900 text-white text-[11px] font-bold">
+                        <span className="inline-flex items-center justify-center min-w-[19px] h-[18px] px-1 rounded-full bg-slate-900 text-white text-[10px] font-bold">
                           {cell.date.getDate()}
                         </span>
                       ) : (
@@ -219,22 +219,22 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
                     </div>
 
                     {uniqueUserCount > 0 && (
-                      <span className="inline-flex items-center justify-center min-w-[24px] h-5 px-1.5 rounded-full bg-blue-600 text-white text-[10px] sm:text-[11px] font-bold shadow-sm">
+                      <span className="inline-flex items-center justify-center min-w-[22px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[10px] sm:text-[10px] font-bold shadow-sm">
                         {uniqueUserCount}명
                       </span>
                     )}
                   </div>
 
-                  <div className="hidden sm:block mt-1.5 space-y-1">
+                  <div className="hidden sm:block mt-1 space-y-0.5">
                     {visibleEntries.map((entry) => (
-                      <div key={`${cell.iso}-${entry.requestId}-${entry.userId}`} className="text-[11px] leading-4 text-slate-700 font-medium">
+                      <div key={`${cell.iso}-${entry.requestId}-${entry.userId}`} className="text-[10px] leading-3.5 text-slate-700 font-medium">
                         <span className="font-bold text-slate-900">{entry.userName}</span>
                         <span className="text-blue-700"> ({entry.leaveTypeName})</span>
                       </div>
                     ))}
 
                     {extraCount > 0 && (
-                      <div className="text-[11px] font-semibold text-blue-600">+{extraCount}명 더보기</div>
+                      <div className="text-[10px] font-semibold text-blue-600">+{extraCount}명 더보기</div>
                     )}
                   </div>
                 </div>
