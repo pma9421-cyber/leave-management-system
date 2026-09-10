@@ -70,7 +70,6 @@ const buildCalendarCells = (visibleMonth: Date): CalendarCell[] => {
 export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
   requests,
   title = '월별 휴가 캘린더',
-  subtitle = '(휴가자 있는 날짜는 파란색으로 이름/휴가종류가 표기됩니다)',
 }) => {
   const today = useMemo(() => new Date(), []);
   const [visibleMonth, setVisibleMonth] = useState<Date>(() => new Date(today.getFullYear(), today.getMonth(), 1));
@@ -105,7 +104,6 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
   }, [approvedRequests]);
 
   const calendarCells = useMemo(() => buildCalendarCells(visibleMonth), [visibleMonth]);
-
   const visibleMonthLabel = `${visibleMonth.getFullYear()}.${`${visibleMonth.getMonth() + 1}`.padStart(2, '0')}`;
 
   const moveMonth = (offset: number) => {
@@ -123,9 +121,7 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
           <h3 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2">
             <CalendarDays className="w-3.5 h-3.5 text-blue-600" />
             <span>{title}</span>
-            <span className="hidden sm:inline text-[11px] font-medium text-slate-400">{subtitle}</span>
           </h3>
-          <p className="sm:hidden text-[10px] text-slate-400 mt-0.5">{subtitle}</p>
         </div>
 
         <div className="flex items-center gap-1.5 self-start sm:self-auto">
@@ -162,11 +158,11 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
       </div>
 
       <div className="mt-3">
-        <div className="grid grid-cols-7 gap-1 sm:gap-1.5 mb-1.5">
+        <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-1.5 sm:mb-2">
           {WEEK_LABELS.map((label, index) => (
             <div
               key={label}
-              className={`text-center text-[10px] font-bold py-1.5 ${
+              className={`text-center text-[10px] sm:text-xs font-bold py-1.5 sm:py-2 ${
                 index === 0 ? 'text-rose-500' : index === 6 ? 'text-blue-600' : 'text-slate-500'
               }`}
             >
@@ -175,7 +171,7 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
           ))}
         </div>
 
-        <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+        <div className="grid grid-cols-7 gap-1 sm:gap-2">
           {calendarCells.map((cell) => {
             const dayEntries = entriesByDate.get(cell.iso) ?? [];
             const uniqueUserCount = new Set(dayEntries.map((entry) => entry.userId)).size;
@@ -188,18 +184,18 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
             return (
               <div
                 key={cell.iso}
-                className={`relative rounded-lg border transition-colors overflow-hidden ${
-                  dayEntries.length > 0
+                className={`rounded-lg sm:rounded-xl border transition-colors overflow-hidden ${
+                  uniqueUserCount > 0
                     ? 'border-blue-300 bg-blue-50/70'
                     : cell.inCurrentMonth
                     ? 'border-slate-200 bg-white'
                     : 'border-slate-100 bg-slate-50/70'
                 }`}
               >
-                <div className="p-1 sm:p-1.5 min-h-[52px] sm:min-h-[68px] lg:min-h-[74px]">
-                  <div className="flex items-start justify-between gap-1">
+                <div className="sm:hidden aspect-square p-1.5 flex flex-col">
+                  <div className="h-1/2 flex items-start justify-start">
                     <div
-                      className={`text-[11px] sm:text-xs font-semibold ${
+                      className={`text-[11px] font-semibold ${
                         !cell.inCurrentMonth
                           ? 'text-slate-300'
                           : isSunday
@@ -217,24 +213,58 @@ export const MonthlyLeaveCalendar: React.FC<MonthlyLeaveCalendarProps> = ({
                         cell.date.getDate()
                       )}
                     </div>
+                  </div>
+
+                  <div className="h-1/2 flex items-start justify-center pt-1">
+                    {uniqueUserCount > 0 ? (
+                      <span className="inline-flex items-center justify-center min-w-[24px] h-[18px] px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-bold shadow-sm">
+                        {uniqueUserCount}명
+                      </span>
+                    ) : (
+                      <span className="h-[18px]" />
+                    )}
+                  </div>
+                </div>
+
+                <div className="hidden sm:block p-2 min-h-[96px] lg:min-h-[108px]">
+                  <div className="flex items-start justify-between gap-1">
+                    <div
+                      className={`text-sm font-semibold ${
+                        !cell.inCurrentMonth
+                          ? 'text-slate-300'
+                          : isSunday
+                          ? 'text-rose-500'
+                          : isSaturday
+                          ? 'text-blue-600'
+                          : 'text-slate-800'
+                      }`}
+                    >
+                      {isToday ? (
+                        <span className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full bg-slate-900 text-white text-[11px] font-bold">
+                          {cell.date.getDate()}
+                        </span>
+                      ) : (
+                        cell.date.getDate()
+                      )}
+                    </div>
 
                     {uniqueUserCount > 0 && (
-                      <span className="inline-flex items-center justify-center min-w-[22px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[10px] sm:text-[10px] font-bold shadow-sm">
+                      <span className="inline-flex items-center justify-center min-w-[24px] h-5 px-1.5 rounded-full bg-blue-600 text-white text-[11px] font-bold shadow-sm">
                         {uniqueUserCount}명
                       </span>
                     )}
                   </div>
 
-                  <div className="hidden sm:block mt-1 space-y-0.5">
+                  <div className="mt-1.5 space-y-1">
                     {visibleEntries.map((entry) => (
-                      <div key={`${cell.iso}-${entry.requestId}-${entry.userId}`} className="text-[10px] leading-3.5 text-slate-700 font-medium">
+                      <div key={`${cell.iso}-${entry.requestId}-${entry.userId}`} className="text-[11px] leading-4 text-slate-700 font-medium">
                         <span className="font-bold text-slate-900">{entry.userName}</span>
                         <span className="text-blue-700"> ({entry.leaveTypeName})</span>
                       </div>
                     ))}
 
                     {extraCount > 0 && (
-                      <div className="text-[10px] font-semibold text-blue-600">+{extraCount}명 더보기</div>
+                      <div className="text-[11px] font-semibold text-blue-600">+{extraCount}명 더보기</div>
                     )}
                   </div>
                 </div>
